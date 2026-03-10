@@ -44,7 +44,7 @@ function vec3ToLatLon(point: THREE.Vector3): { lat: number; lng: number } {
 }
 
 /* Custom bench SVG icon */
-function BenchIcon({ className }: { className?: string }) {
+function BenchIcon({ className, style }: { className?: string; style?: React.CSSProperties }) {
   return (
     <svg
       viewBox="0 0 24 24"
@@ -54,6 +54,7 @@ function BenchIcon({ className }: { className?: string }) {
       strokeLinecap="round"
       strokeLinejoin="round"
       className={className}
+      style={style}
     >
       {/* Back top rail */}
       <path d="M5 6h14" />
@@ -87,6 +88,7 @@ function SingleMarker({
   const { setSelectedBench } = useAppState();
   const [visible, setVisible] = useState(true);
   const [hovered, setHovered] = useState(false);
+  const [zoomScale, setZoomScale] = useState(1);
 
   useFrame(() => {
     if (!groupRef.current) return;
@@ -96,16 +98,38 @@ function SingleMarker({
     const flatPos = latLonToFlat(bench.latitude, bench.longitude);
     groupRef.current.position.lerpVectors(spherePos, flatPos, morphFactor);
 
-    // Occlusion via dot product (globe mode only)
+    // Occlusion: marker visible if its surface normal faces the camera
+    // Must use world position since the globe group rotates
     if (morphFactor < 0.5) {
-      const markerDir = spherePos.clone().normalize();
-      const camDir = camera.position.clone().normalize();
-      const dot = markerDir.dot(camDir);
-      setVisible(dot > -0.05);
+      // Get marker's actual world position (accounts for parent group rotation)
+      const worldPos = new THREE.Vector3();
+      groupRef.current.getWorldPosition(worldPos);
+
+      // The surface normal at this point is just the normalized world position
+      // (since globe is centered at origin)
+      const normal = worldPos.clone().normalize();
+
+      // Direction from marker to camera
+      const toCamera = camera.position.clone().sub(worldPos).normalize();
+
+      // Marker is visible if normal faces camera (dot product > 0)
+      const dot = normal.dot(toCamera);
+      setVisible(dot > 0.1); // Small threshold to hide markers right at the horizon
     } else {
       setVisible(true);
     }
+
+    // Inverse zoom scaling: closer camera = smaller pins
+    // Camera distance ranges roughly from 1.5 (close) to 4 (far)
+    const camDist = camera.position.length();
+    // Scale inversely: at distance 4 = scale 1, at distance 1.5 = scale ~0.5
+    const scale = Math.min(1, Math.max(0.5, (camDist - 1) / 3));
+    setZoomScale(scale);
   });
+
+  // Fixed base size (no size change on hover to prevent position shift)
+  const baseSize = isSelected ? 28 : 24;
+  const scaledSize = baseSize * zoomScale;
 
   return (
     <group ref={groupRef}>
@@ -130,12 +154,13 @@ function SingleMarker({
         >
           {/* Icon badge */}
           <div
-            className="relative flex items-center justify-center transition-all duration-200"
+            className="relative flex items-center justify-center"
             style={{
-              width: isSelected ? 44 : hovered ? 40 : 36,
-              height: isSelected ? 44 : hovered ? 40 : 36,
-              borderRadius: '50% 50% 50% 4px',
+              width: scaledSize,
+              height: scaledSize,
+              borderRadius: `50% 50% 50% ${Math.max(2, scaledSize * 0.15)}px`,
               transform: 'rotate(-45deg)',
+              transition: 'background 0.2s, box-shadow 0.2s',
               background: isSelected
                 ? 'linear-gradient(135deg, #e0b07a, #c9945a)'
                 : hovered
@@ -148,11 +173,21 @@ function SingleMarker({
                 : '0 2px 8px rgba(0,0,0,0.35)',
             }}
           >
-            <div style={{ transform: 'rotate(45deg)' }}>
+            <div
+              style={{
+                transform: 'rotate(45deg)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
               <BenchIcon
-                className={`transition-all duration-200 ${
-                  isSelected ? 'w-5 h-5 text-[#17130e]' : 'w-4 h-4 text-[#f0e6d8]'
-                }`}
+                style={{
+                  width: scaledSize * 0.55,
+                  height: scaledSize * 0.55,
+                  color: isSelected ? '#17130e' : '#f0e6d8',
+                  transition: 'color 0.2s',
+                }}
               />
             </div>
           </div>
@@ -160,16 +195,16 @@ function SingleMarker({
           {/* Name label — show on hover or selected */}
           {(hovered || isSelected) && (
             <div
-              className="mt-1.5 px-2 py-0.5 rounded text-center whitespace-nowrap"
+              className="mt-1 px-1.5 py-0.5 rounded text-center whitespace-nowrap"
               style={{
                 background: 'rgba(33,28,21,0.88)',
                 border: '1px solid rgba(68,59,48,0.5)',
                 backdropFilter: 'blur(8px)',
-                fontSize: 10,
+                fontSize: Math.max(8, 9 * zoomScale),
                 fontFamily: "'Outfit', sans-serif",
                 fontWeight: 500,
                 color: '#f0e6d8',
-                maxWidth: 140,
+                maxWidth: 120,
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 letterSpacing: '0.01em',
@@ -204,12 +239,12 @@ function PickedLocationMarker({ morphFactor }: { morphFactor: number }) {
         <div className="flex flex-col items-center animate-bounce">
           <div
             style={{
-              width: 32,
-              height: 32,
-              borderRadius: '50% 50% 50% 4px',
+              width: 22,
+              height: 22,
+              borderRadius: '50% 50% 50% 3px',
               transform: 'rotate(-45deg)',
               background: 'linear-gradient(135deg, #a3c2a5, #6b8f6e)',
-              boxShadow: '0 3px 14px rgba(107,143,110,0.45)',
+              boxShadow: '0 2px 10px rgba(107,143,110,0.45)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -221,17 +256,17 @@ function PickedLocationMarker({ morphFactor }: { morphFactor: number }) {
               stroke="#17130e"
               strokeWidth="2.5"
               strokeLinecap="round"
-              style={{ width: 14, height: 14, transform: 'rotate(45deg)' }}
+              style={{ width: 10, height: 10, transform: 'rotate(45deg)' }}
             >
               <path d="M12 5v14M5 12h14" />
             </svg>
           </div>
           <div
-            className="mt-1 px-2 py-0.5 rounded"
+            className="mt-1 px-1.5 py-0.5 rounded"
             style={{
               background: 'rgba(33,28,21,0.88)',
               border: '1px solid rgba(68,59,48,0.5)',
-              fontSize: 10,
+              fontSize: 9,
               fontFamily: "'JetBrains Mono', monospace",
               color: '#a3c2a5',
             }}
