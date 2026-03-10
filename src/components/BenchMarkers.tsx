@@ -1,7 +1,8 @@
 'use client';
 
-import { useRef, useCallback } from 'react';
+import { useRef, useCallback, useState } from 'react';
 import { useFrame, useThree, ThreeEvent } from '@react-three/fiber';
+import { Html } from '@react-three/drei';
 import * as THREE from 'three';
 import type { Bench } from '@/types';
 import { useAppState } from '@/lib/store';
@@ -10,7 +11,6 @@ const DEG2RAD = Math.PI / 180;
 const GLOBE_RADIUS = 1;
 const MAP_WIDTH = 3.6;
 const MAX_LAT = 82;
-
 const maxMercY = Math.log(Math.tan(Math.PI / 4 + (MAX_LAT * DEG2RAD) / 2));
 
 export function latLonToVec3(lat: number, lon: number, radius: number): THREE.Vector3 {
@@ -31,7 +31,7 @@ function latLonToFlat(lat: number, lon: number): THREE.Vector3 {
   return new THREE.Vector3(
     (u - 0.5) * MAP_WIDTH,
     (mercY / maxMercY) * (MAP_WIDTH / 2) * 0.55,
-    0.01
+    0.02
   );
 }
 
@@ -43,11 +43,36 @@ function vec3ToLatLon(point: THREE.Vector3): { lat: number; lng: number } {
   return { lat, lng: normalizedLng };
 }
 
-const markerColor = new THREE.Color('#c9945a');
-const markerEmissive = new THREE.Color('#e0b07a');
-const pickerColor = new THREE.Color('#6b8f6e');
-const selectedColor = new THREE.Color('#f0d9a8');
+/* Custom bench SVG icon */
+function BenchIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      {/* Back top rail */}
+      <path d="M5 6h14" />
+      {/* Back uprights */}
+      <path d="M6 6v5" />
+      <path d="M18 6v5" />
+      {/* Seat */}
+      <path d="M3 11h18" />
+      {/* Legs */}
+      <path d="M5 11v6" />
+      <path d="M19 11v6" />
+      {/* Armrests */}
+      <path d="M3 9h3" />
+      <path d="M18 9h3" />
+    </svg>
+  );
+}
 
+/* A single bench marker rendered as Html overlay */
 function SingleMarker({
   bench,
   morphFactor,
@@ -57,124 +82,169 @@ function SingleMarker({
   morphFactor: number;
   isSelected: boolean;
 }) {
-  const meshRef = useRef<THREE.Mesh>(null);
-  const ringRef = useRef<THREE.Mesh>(null);
+  const groupRef = useRef<THREE.Group>(null);
   const { camera } = useThree();
   const { setSelectedBench } = useAppState();
-  const opacityRef = useRef(1);
+  const [visible, setVisible] = useState(true);
+  const [hovered, setHovered] = useState(false);
 
-  useFrame((_, dt) => {
-    if (!meshRef.current) return;
+  useFrame(() => {
+    if (!groupRef.current) return;
 
-    const spherePos = latLonToVec3(bench.latitude, bench.longitude, GLOBE_RADIUS + 0.012);
+    // Position: lerp between globe and flat
+    const spherePos = latLonToVec3(bench.latitude, bench.longitude, GLOBE_RADIUS + 0.02);
     const flatPos = latLonToFlat(bench.latitude, bench.longitude);
-    const t = morphFactor;
+    groupRef.current.position.lerpVectors(spherePos, flatPos, morphFactor);
 
-    meshRef.current.position.lerpVectors(spherePos, flatPos, t);
-
-    // Occlusion: check if marker faces camera
-    if (t < 0.5) {
+    // Occlusion via dot product (globe mode only)
+    if (morphFactor < 0.5) {
       const markerDir = spherePos.clone().normalize();
       const camDir = camera.position.clone().normalize();
       const dot = markerDir.dot(camDir);
-      const targetOp = dot > -0.05 ? 1 : 0;
-      opacityRef.current += (targetOp - opacityRef.current) * Math.min(dt * 8, 1);
+      setVisible(dot > -0.05);
     } else {
-      opacityRef.current += (1 - opacityRef.current) * Math.min(dt * 8, 1);
+      setVisible(true);
     }
-
-    const mat = meshRef.current.material as THREE.MeshStandardMaterial;
-    mat.opacity = opacityRef.current;
-    meshRef.current.visible = opacityRef.current > 0.02;
-
-    // Pulse ring for selected
-    if (ringRef.current) {
-      ringRef.current.position.copy(meshRef.current.position);
-      const scale = isSelected ? 1 + Math.sin(Date.now() * 0.004) * 0.3 : 0;
-      ringRef.current.scale.setScalar(scale);
-      ringRef.current.visible = isSelected && opacityRef.current > 0.5;
-      ringRef.current.lookAt(camera.position);
-    }
-
-    // Scale based on distance for better visibility
-    const dist = camera.position.distanceTo(meshRef.current.position);
-    const s = THREE.MathUtils.clamp(dist * 0.22, 0.08, 0.4);
-    meshRef.current.scale.setScalar(isSelected ? s * 1.3 : s);
   });
 
   return (
-    <>
-      <mesh
-        ref={meshRef}
-        onClick={(e) => {
-          e.stopPropagation();
-          setSelectedBench(isSelected ? null : bench);
+    <group ref={groupRef}>
+      <Html
+        center
+        style={{
+          opacity: visible ? 1 : 0,
+          transition: 'opacity 0.25s ease',
+          pointerEvents: visible ? 'auto' : 'none',
         }}
-        onPointerOver={(e) => {
-          e.stopPropagation();
-          document.body.style.cursor = 'pointer';
-        }}
-        onPointerOut={() => {
-          document.body.style.cursor = '';
-        }}
+        distanceFactor={2.4}
       >
-        <sphereGeometry args={[0.015, 12, 12]} />
-        <meshStandardMaterial
-          color={isSelected ? selectedColor : markerColor}
-          emissive={isSelected ? selectedColor : markerEmissive}
-          emissiveIntensity={isSelected ? 1.2 : 0.6}
-          transparent
-          depthWrite={false}
-        />
-      </mesh>
-      <mesh ref={ringRef}>
-        <ringGeometry args={[0.018, 0.024, 24]} />
-        <meshBasicMaterial
-          color={markerEmissive}
-          transparent
-          opacity={0.5}
-          side={THREE.DoubleSide}
-          depthWrite={false}
-        />
-      </mesh>
-    </>
+        <div
+          className="flex flex-col items-center select-none"
+          onClick={(e) => {
+            e.stopPropagation();
+            setSelectedBench(isSelected ? null : bench);
+          }}
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+          style={{ cursor: 'pointer' }}
+        >
+          {/* Icon badge */}
+          <div
+            className="relative flex items-center justify-center transition-all duration-200"
+            style={{
+              width: isSelected ? 44 : hovered ? 40 : 36,
+              height: isSelected ? 44 : hovered ? 40 : 36,
+              borderRadius: '50% 50% 50% 4px',
+              transform: 'rotate(-45deg)',
+              background: isSelected
+                ? 'linear-gradient(135deg, #e0b07a, #c9945a)'
+                : hovered
+                ? 'linear-gradient(135deg, #c9945a, #a87840)'
+                : 'linear-gradient(135deg, #b08050, #8a6535)',
+              boxShadow: isSelected
+                ? '0 4px 20px rgba(201,148,90,0.5), 0 0 0 3px rgba(201,148,90,0.2)'
+                : hovered
+                ? '0 3px 14px rgba(201,148,90,0.35)'
+                : '0 2px 8px rgba(0,0,0,0.35)',
+            }}
+          >
+            <div style={{ transform: 'rotate(45deg)' }}>
+              <BenchIcon
+                className={`transition-all duration-200 ${
+                  isSelected ? 'w-5 h-5 text-[#17130e]' : 'w-4 h-4 text-[#f0e6d8]'
+                }`}
+              />
+            </div>
+          </div>
+
+          {/* Name label — show on hover or selected */}
+          {(hovered || isSelected) && (
+            <div
+              className="mt-1.5 px-2 py-0.5 rounded text-center whitespace-nowrap"
+              style={{
+                background: 'rgba(33,28,21,0.88)',
+                border: '1px solid rgba(68,59,48,0.5)',
+                backdropFilter: 'blur(8px)',
+                fontSize: 10,
+                fontFamily: "'Outfit', sans-serif",
+                fontWeight: 500,
+                color: '#f0e6d8',
+                maxWidth: 140,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                letterSpacing: '0.01em',
+              }}
+            >
+              {bench.name}
+            </div>
+          )}
+        </div>
+      </Html>
+    </group>
   );
 }
 
+/* Picked-location marker (green pin when adding a bench) */
 function PickedLocationMarker({ morphFactor }: { morphFactor: number }) {
   const { pickedLocation } = useAppState();
-  const meshRef = useRef<THREE.Mesh>(null);
-  const { camera } = useThree();
+  const groupRef = useRef<THREE.Group>(null);
 
   useFrame(() => {
-    if (!meshRef.current || !pickedLocation) return;
-
-    const spherePos = latLonToVec3(pickedLocation.lat, pickedLocation.lng, GLOBE_RADIUS + 0.015);
+    if (!groupRef.current || !pickedLocation) return;
+    const spherePos = latLonToVec3(pickedLocation.lat, pickedLocation.lng, GLOBE_RADIUS + 0.025);
     const flatPos = latLonToFlat(pickedLocation.lat, pickedLocation.lng);
-    meshRef.current.position.lerpVectors(spherePos, flatPos, morphFactor);
-
-    const dist = camera.position.distanceTo(meshRef.current.position);
-    const s = THREE.MathUtils.clamp(dist * 0.3, 0.1, 0.5);
-    meshRef.current.scale.setScalar(s + Math.sin(Date.now() * 0.005) * s * 0.2);
+    groupRef.current.position.lerpVectors(spherePos, flatPos, morphFactor);
   });
 
   if (!pickedLocation) return null;
 
   return (
-    <mesh ref={meshRef}>
-      <sphereGeometry args={[0.018, 12, 12]} />
-      <meshStandardMaterial
-        color={pickerColor}
-        emissive={pickerColor}
-        emissiveIntensity={1}
-        transparent
-        opacity={0.9}
-        depthWrite={false}
-      />
-    </mesh>
+    <group ref={groupRef}>
+      <Html center distanceFactor={2.4}>
+        <div className="flex flex-col items-center animate-bounce">
+          <div
+            style={{
+              width: 32,
+              height: 32,
+              borderRadius: '50% 50% 50% 4px',
+              transform: 'rotate(-45deg)',
+              background: 'linear-gradient(135deg, #a3c2a5, #6b8f6e)',
+              boxShadow: '0 3px 14px rgba(107,143,110,0.45)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="#17130e"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              style={{ width: 14, height: 14, transform: 'rotate(45deg)' }}
+            >
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+          </div>
+          <div
+            className="mt-1 px-2 py-0.5 rounded"
+            style={{
+              background: 'rgba(33,28,21,0.88)',
+              border: '1px solid rgba(68,59,48,0.5)',
+              fontSize: 10,
+              fontFamily: "'JetBrains Mono', monospace",
+              color: '#a3c2a5',
+            }}
+          >
+            {pickedLocation.lat.toFixed(4)}, {pickedLocation.lng.toFixed(4)}
+          </div>
+        </div>
+      </Html>
+    </group>
   );
 }
 
+/* Invisible sphere for click-to-pick */
 function GlobeClickHandler() {
   const { pickingLocation, setPickedLocation } = useAppState();
 
@@ -182,9 +252,11 @@ function GlobeClickHandler() {
     (e: ThreeEvent<MouseEvent>) => {
       if (!pickingLocation) return;
       e.stopPropagation();
-      const point = e.point;
-      const { lat, lng } = vec3ToLatLon(point);
-      setPickedLocation({ lat: Math.round(lat * 10000) / 10000, lng: Math.round(lng * 10000) / 10000 });
+      const { lat, lng } = vec3ToLatLon(e.point);
+      setPickedLocation({
+        lat: Math.round(lat * 10000) / 10000,
+        lng: Math.round(lng * 10000) / 10000,
+      });
     },
     [pickingLocation, setPickedLocation]
   );

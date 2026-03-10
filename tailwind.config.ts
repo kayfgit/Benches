@@ -5,13 +5,13 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        deep: '#070b14',
-        surface: '#0f1724',
-        elevated: '#1a2538',
-        ridge: '#263148',
-        'text-primary': '#e8e0d4',
-        'text-secondary': '#8e9bb0',
-        'text-muted': '#556479',
+        deep: '#17130e',
+        surface: '#211c15',
+        elevated: '#2e2720',
+        ridge: '#443b30',
+        'text-primary': '#f0e6d8',
+        'text-secondary': '#b5a48e',
+        'text-muted': '#7a6b58',
         gold: { DEFAULT: '#c9945a', light: '#e0b07a', dim: '#8a6535' },
         sage: { DEFAULT: '#6b8f6e', light: '#a3c2a5' },
       },
