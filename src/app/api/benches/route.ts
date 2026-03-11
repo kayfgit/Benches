@@ -3,30 +3,43 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
+    const session = await getServerSession(authOptions);
+    const userId = session?.user ? (session.user as Record<string, unknown>).id as string : null;
+
     const benches = await prisma.bench.findMany({
       include: {
         photos: true,
         user: { select: { name: true } },
+        votes: true,
+        comments: true,
       },
       orderBy: { createdAt: 'desc' },
     });
 
-    const formatted = benches.map((b) => ({
-      id: b.id,
-      name: b.name,
-      description: b.description,
-      directions: b.directions,
-      latitude: b.latitude,
-      longitude: b.longitude,
-      country: b.country,
-      altitude: b.altitude,
-      photos: b.photos,
-      userId: b.userId,
-      userName: b.user.name,
-      createdAt: b.createdAt.toISOString(),
-    }));
+    const formatted = benches.map((b) => {
+      const voteCount = b.votes.reduce((sum, v) => sum + v.value, 0);
+      const userVote = userId ? b.votes.find(v => v.userId === userId)?.value || 0 : 0;
+
+      return {
+        id: b.id,
+        name: b.name,
+        description: b.description,
+        directions: b.directions,
+        latitude: b.latitude,
+        longitude: b.longitude,
+        country: b.country,
+        altitude: b.altitude,
+        photos: b.photos,
+        userId: b.userId,
+        userName: b.user.name,
+        createdAt: b.createdAt.toISOString(),
+        voteCount,
+        userVote,
+        commentCount: b.comments.length,
+      };
+    });
 
     return NextResponse.json(formatted);
   } catch {

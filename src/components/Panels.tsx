@@ -468,8 +468,8 @@ export function AddBenchPanel() {
         padding: 0,
         overflow: 'hidden',
         borderRadius: '16px',
-        // Height collapses slower (0.7s) than width (0.35s) so it forms a square
-        transition: 'width 0.35s cubic-bezier(0.4, 0, 0.2, 1), height 0.7s cubic-bezier(0.3, 0, 0.2, 1), border-radius 0.5s ease-out, padding 0.1s ease-out',
+        // Both width and height collapse together to form a square
+        transition: 'width 0.45s cubic-bezier(0.4, 0, 0.2, 1), height 0.5s cubic-bezier(0.3, 0, 0.2, 1), border-radius 0.5s ease-out, padding 0.1s ease-out',
       };
     }
     if (successAnimation === 'square') {

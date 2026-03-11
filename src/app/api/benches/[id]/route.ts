@@ -3,9 +3,12 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 
+// Admin email - must match Forum.tsx
+const ADMIN_EMAIL = 'test@test.com';
+
 export async function DELETE(
   request: Request,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
@@ -13,7 +16,12 @@ export async function DELETE(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const benchId = params.id;
+    // Check if admin
+    if (session.user.email !== ADMIN_EMAIL) {
+      return NextResponse.json({ error: 'Forbidden - Admin only' }, { status: 403 });
+    }
+
+    const { id: benchId } = await params;
 
     // Check if bench exists
     const bench = await prisma.bench.findUnique({

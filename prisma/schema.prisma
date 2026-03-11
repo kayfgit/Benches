@@ -8,27 +8,33 @@ datasource db {
 }
 
 model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String
-  password  String
-  benches   Bench[]
-  createdAt DateTime @default(now())
+  id            String         @id @default(cuid())
+  email         String         @unique
+  name          String
+  password      String
+  benches       Bench[]
+  comments      Comment[]
+  votes         Vote[]
+  issues        Issue[]
+  issueComments IssueComment[]
+  createdAt     DateTime       @default(now())
 }
 
 model Bench {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   name        String
   description String
-  directions  String   @default("")
+  directions  String    @default("")
   latitude    Float
   longitude   Float
-  country     String   @default("")
+  country     String    @default("")
   altitude    Float?
   photos      Photo[]
+  comments    Comment[]
+  votes       Vote[]
   userId      String
-  user        User     @relation(fields: [userId], references: [id])
-  createdAt   DateTime @default(now())
+  user        User      @relation(fields: [userId], references: [id])
+  createdAt   DateTime  @default(now())
 }
 
 model Photo {
@@ -36,4 +42,49 @@ model Photo {
   url     String
   benchId String
   bench   Bench  @relation(fields: [benchId], references: [id], onDelete: Cascade)
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  content   String
+  benchId   String
+  bench     Bench    @relation(fields: [benchId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+}
+
+model Vote {
+  id        String   @id @default(cuid())
+  value     Int      // 1 for upvote, -1 for downvote
+  benchId   String
+  bench     Bench    @relation(fields: [benchId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@unique([benchId, userId]) // One vote per user per bench
+}
+
+model Issue {
+  id        String         @id @default(cuid())
+  title     String
+  content   String
+  type      String         // "bench" or "bug"
+  status    String         @default("open") // "open", "resolved", "closed"
+  benchId   String?        // Optional, only for bench-related issues
+  userId    String
+  user      User           @relation(fields: [userId], references: [id])
+  comments  IssueComment[]
+  createdAt DateTime       @default(now())
+}
+
+model IssueComment {
+  id        String   @id @default(cuid())
+  content   String
+  issueId   String
+  issue     Issue    @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
 }

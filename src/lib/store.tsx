@@ -18,6 +18,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [shouldResumeRotation, setShouldResumeRotation] = useState(false);
   const [forumButtonPulse, setForumButtonPulse] = useState(false);
   const [transitioningBenchId, setTransitioningBenchId] = useState<string | null>(null);
+  const [showForum, setShowForum] = useState(false);
 
   const addBench = useCallback((bench: Bench) => {
     setBenches((prev) => [bench, ...prev]);
@@ -43,6 +44,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         shouldResumeRotation, setShouldResumeRotation,
         forumButtonPulse, setForumButtonPulse,
         transitioningBenchId, setTransitioningBenchId,
+        showForum, setShowForum,
       }}
     >
       {children}

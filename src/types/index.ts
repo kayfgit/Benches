@@ -16,6 +16,30 @@ export interface Bench {
   userId: string;
   userName?: string;
   createdAt: string;
+  voteCount?: number;
+  userVote?: number; // 1, -1, or 0/undefined
+  commentCount?: number;
+}
+
+export interface Comment {
+  id: string;
+  content: string;
+  benchId: string;
+  userId: string;
+  userName: string;
+  createdAt: string;
+}
+
+export interface Issue {
+  id: string;
+  title: string;
+  content: string;
+  type: 'bench' | 'bug';
+  status: 'open' | 'resolved' | 'closed';
+  benchId?: string;
+  userId: string;
+  userName: string;
+  createdAt: string;
 }
 
 export interface AppState {
@@ -45,4 +69,6 @@ export interface AppState {
   setForumButtonPulse: (v: boolean) => void;
   transitioningBenchId: string | null;
   setTransitioningBenchId: (id: string | null) => void;
+  showForum: boolean;
+  setShowForum: (show: boolean) => void;
 }

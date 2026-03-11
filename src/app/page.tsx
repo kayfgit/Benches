@@ -6,12 +6,13 @@ import { useSession, signOut } from 'next-auth/react';
 import { useAppState } from '@/lib/store';
 import { AuthModal } from '@/components/AuthModal';
 import { BenchDetailPanel, AddBenchPanel } from '@/components/Panels';
+import { ForumPanel } from '@/components/Forum';
 
 const GlobeScene = dynamic(() => import('@/components/GlobeScene'), { ssr: false });
 
 export default function Home() {
   const { data: session } = useSession();
-  const { setBenches, setShowAuth, setAuthMode, setShowAddBench, setFlyTo, zoomLevel, setShouldResumeRotation, forumButtonPulse, setForumButtonPulse } = useAppState();
+  const { setBenches, setShowAuth, setAuthMode, setShowAddBench, setFlyTo, zoomLevel, setShouldResumeRotation, forumButtonPulse, setForumButtonPulse, showForum, setShowForum } = useAppState();
   const [titleVisible, setTitleVisible] = useState(true);
   const [shakeButton, setShakeButton] = useState<'forum' | 'addBench' | null>(null);
   const [showArrow, setShowArrow] = useState(false);
@@ -110,10 +111,10 @@ export default function Home() {
 
       {/* Top right controls */}
       <div className="fixed top-6 right-6 z-[999] flex items-center gap-3 select-none">
-        {/* Forum Button */}
+        {/* Forum / Globe Toggle Button */}
         <button
           ref={forumButtonRef}
-          onClick={() => session ? console.log('Open Forum') : handleDisabledClick('forum')}
+          onClick={() => session ? setShowForum(!showForum) : handleDisabledClick('forum')}
           className={`
             relative flex items-center gap-2 text-sm py-2.5 px-4 rounded-full shadow-lg
             transition-all duration-200 outline-none focus:outline-none
@@ -125,12 +126,24 @@ export default function Home() {
             ${forumButtonPulse ? 'animate-forum-pulse' : ''}
           `}
         >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-            <path d="M8 10h8" />
-            <path d="M8 14h4" />
-          </svg>
-          <span className="hidden sm:inline">Forum</span>
+          {showForum ? (
+            <>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10" />
+                <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+              </svg>
+              <span className="hidden sm:inline">Globe</span>
+            </>
+          ) : (
+            <>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                <path d="M8 10h8" />
+                <path d="M8 14h4" />
+              </svg>
+              <span className="hidden sm:inline">Forum</span>
+            </>
+          )}
         </button>
 
         {/* Add Bench Button */}
@@ -239,6 +252,7 @@ export default function Home() {
       <BenchDetailPanel />
       <AddBenchPanel />
       <AuthModal />
+      <ForumPanel />
 
       {/* Shake animation styles */}
       <style jsx>{`
