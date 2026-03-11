@@ -51,19 +51,60 @@ function DustMotes() {
   );
 }
 
-/* Custom zoom controller with Ctrl/Shift modifiers + adaptive rotation speed */
+/* Custom zoom controller with cursor-targeting, smoothing, and Ctrl/Shift modifiers */
 function ZoomController({ controlsRef }: { controlsRef: React.RefObject<any> }) {
   const { camera, gl } = useThree();
-  const zoomSpeed = useRef(1);
+  const zoomSpeedMod = useRef(1);
 
-  // Adjust rotation speed based on zoom level (slower when close)
+  // Smooth zoom state
+  const targetCameraPos = useRef(new THREE.Vector3());
+  const isAnimating = useRef(false);
+  const raycaster = useRef(new THREE.Raycaster());
+  const globeSphere = useRef(new THREE.Sphere(new THREE.Vector3(0, 0, 0), 1));
+
+  // Initialize target position
+  useEffect(() => {
+    targetCameraPos.current.copy(camera.position);
+  }, [camera]);
+
+  // Stop animation when user starts dragging
+  useEffect(() => {
+    const controls = controlsRef.current;
+    if (!controls) return;
+
+    const handleStart = () => {
+      // User started dragging - stop zoom animation immediately
+      isAnimating.current = false;
+      targetCameraPos.current.copy(camera.position);
+    };
+
+    controls.addEventListener('start', handleStart);
+    return () => controls.removeEventListener('start', handleStart);
+  }, [controlsRef, camera]);
+
+  // Smooth animation + adaptive rotation speed
   useFrame(() => {
     const controls = controlsRef.current;
     if (!controls) return;
 
+    // Keep controls target at origin always (globe center)
+    controls.target.set(0, 0, 0);
+
+    // Animate camera position smoothly
+    if (isAnimating.current) {
+      camera.position.lerp(targetCameraPos.current, 0.15);
+
+      // Stop animating when close enough
+      if (camera.position.distanceTo(targetCameraPos.current) < 0.0001) {
+        camera.position.copy(targetCameraPos.current);
+        isAnimating.current = false;
+      }
+      controls.update();
+    }
+
+    // Adaptive rotation speed based on zoom level
     const dist = camera.position.length();
-    // At dist=1.08 (closest), speed ~0.05; at dist=3, speed ~0.4; at dist=50, speed ~0.8
-    const rotateSpeed = Math.min(0.8, Math.max(0.05, (dist - 1) * 0.2));
+    const rotateSpeed = Math.min(0.8, Math.max(0.02, (dist - 1) * 0.25));
     controls.rotateSpeed = rotateSpeed;
   });
 
@@ -71,13 +112,13 @@ function ZoomController({ controlsRef }: { controlsRef: React.RefObject<any> }) 
     const canvas = gl.domElement;
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Control') zoomSpeed.current = 3; // Faster
-      if (e.key === 'Shift') zoomSpeed.current = 0.3; // Slower
+      if (e.key === 'Control') zoomSpeedMod.current = 3;
+      if (e.key === 'Shift') zoomSpeedMod.current = 0.3;
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
       if (e.key === 'Control' || e.key === 'Shift') {
-        zoomSpeed.current = 1;
+        zoomSpeedMod.current = 1;
       }
     };
 
@@ -87,17 +128,43 @@ function ZoomController({ controlsRef }: { controlsRef: React.RefObject<any> }) 
       const controls = controlsRef.current;
       if (!controls || !controls.enabled) return;
 
-      // Calculate zoom factor based on current distance and wheel delta
       const currentDist = camera.position.length();
-      const delta = e.deltaY * 0.001 * zoomSpeed.current;
 
-      // Use exponential zoom for smooth feel at all distances
+      // Zoom speed inversely proportional to distance (slower when closer)
+      const distanceFactor = Math.max(0.1, (currentDist - 1) * 0.5);
+      const delta = e.deltaY * 0.002 * zoomSpeedMod.current * distanceFactor;
       const zoomFactor = Math.exp(delta);
-      const newDist = Math.max(1.08, Math.min(50, currentDist * zoomFactor));
 
-      // Scale camera position to new distance
-      camera.position.normalize().multiplyScalar(newDist);
-      controls.update();
+      // Min distance 1.002, max 50
+      const newDist = Math.max(1.002, Math.min(50, currentDist * zoomFactor));
+      const zoomingIn = newDist < currentDist;
+
+      // Get mouse position in normalized device coordinates (-1 to +1)
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      const mouseY = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+      // Raycast from cursor to find point on globe
+      raycaster.current.setFromCamera(new THREE.Vector2(mouseX, mouseY), camera);
+      const intersectPoint = new THREE.Vector3();
+      const hit = raycaster.current.ray.intersectSphere(globeSphere.current, intersectPoint);
+
+      if (hit && zoomingIn && currentDist < 8) {
+        // Zoom towards cursor: rotate camera around origin towards cursor point
+        const currentDir = camera.position.clone().normalize();
+        const cursorDir = intersectPoint.clone().normalize();
+
+        // Interpolate direction towards cursor
+        const lerpAmount = Math.min(0.4, (1 - newDist / currentDist) * 2.5);
+        const newDir = currentDir.clone().lerp(cursorDir, lerpAmount).normalize();
+
+        targetCameraPos.current.copy(newDir.multiplyScalar(newDist));
+      } else {
+        // Zooming out or no hit - just scale distance
+        targetCameraPos.current.copy(camera.position).normalize().multiplyScalar(newDist);
+      }
+
+      isAnimating.current = true;
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -197,7 +264,7 @@ export default function GlobeScene() {
   return (
     <div className={`absolute inset-0 ${pickingLocation ? 'cursor-crosshair' : ''}`}>
       <Canvas
-        camera={{ position: [0, 0.3, 2.8], fov: 50, near: 0.01, far: 100 }}
+        camera={{ position: [0, 0.3, 2.8], fov: 50, near: 0.001, far: 100 }}
         gl={{ antialias: true, alpha: true, powerPreference: 'high-performance' }}
         style={{
           background: 'radial-gradient(ellipse at 50% 45%, #2e261e 0%, #1f1a13 40%, #17130e 80%)',

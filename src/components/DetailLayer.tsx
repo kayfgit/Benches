@@ -174,11 +174,13 @@ export function DetailLayer() {
       return prev + diff * 0.12;
     });
 
-    // Update geometry when camera moves significantly (throttled)
+    // Update geometry when camera moves significantly (throttled, adaptive threshold)
     const anyVisible = opacity > 0.01 || statesOpacity > 0.01;
     if (dataLoaded.current && anyVisible) {
       const moved = camera.position.distanceTo(lastUpdatePos.current);
-      if (moved > 0.15) {
+      // Smaller threshold when zoomed in close
+      const updateThreshold = Math.max(0.02, dist * 0.08);
+      if (moved > updateThreshold) {
         lastUpdatePos.current.copy(camera.position);
         updateGeometry(camera.position.x, camera.position.y, camera.position.z);
       }
