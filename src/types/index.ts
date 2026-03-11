@@ -34,10 +34,15 @@ export interface AppState {
   benches: Bench[];
   setBenches: (b: Bench[]) => void;
   addBench: (b: Bench) => void;
+  removeBench: (benchId: string) => void;
   flyTo: { lat: number; lng: number } | null;
   setFlyTo: (loc: { lat: number; lng: number } | null) => void;
   zoomLevel: number;
   setZoomLevel: (level: number) => void;
   shouldResumeRotation: boolean;
   setShouldResumeRotation: (v: boolean) => void;
+  forumButtonPulse: boolean;
+  setForumButtonPulse: (v: boolean) => void;
+  transitioningBenchId: string | null;
+  setTransitioningBenchId: (id: string | null) => void;
 }

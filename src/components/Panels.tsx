@@ -8,7 +8,9 @@ import type { Bench } from '@/types';
 /* ─── Bench Detail Panel ────────────────────── */
 
 export function BenchDetailPanel() {
-  const { selectedBench, setSelectedBench, setFlyTo } = useAppState();
+  const { selectedBench, setSelectedBench, setFlyTo, removeBench } = useAppState();
+  const [deleting, setDeleting] = useState(false);
+
   if (!selectedBench) return null;
 
   const coords = `${selectedBench.latitude.toFixed(4)}, ${selectedBench.longitude.toFixed(4)}`;
@@ -17,6 +19,22 @@ export function BenchDetailPanel() {
     month: 'short',
     day: 'numeric',
   });
+
+  const handleDelete = async () => {
+    if (deleting) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/benches/${selectedBench.id}`, { method: 'DELETE' });
+      if (res.ok) {
+        removeBench(selectedBench.id);
+        setSelectedBench(null);
+      }
+    } catch {
+      // Ignore errors
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   return (
     <div className="fixed left-4 bottom-4 top-20 z-40 w-[340px] max-w-[calc(100vw-2rem)] flex">
@@ -130,6 +148,15 @@ export function BenchDetailPanel() {
               <span>{dateStr}</span>
             </div>
           </div>
+
+          {/* Delete button for testing */}
+          <button
+            onClick={handleDelete}
+            disabled={deleting}
+            className="w-full mt-4 py-2 px-4 rounded-lg bg-red-500/20 border border-red-500/30 text-red-400 text-sm font-medium hover:bg-red-500/30 transition-colors disabled:opacity-50 disabled:cursor-wait"
+          >
+            {deleting ? 'Removing...' : 'Remove Bench'}
+          </button>
         </div>
       </div>
     </div>
@@ -148,6 +175,8 @@ export function AddBenchPanel() {
     pickedLocation,
     setPickedLocation,
     addBench,
+    setForumButtonPulse,
+    setTransitioningBenchId,
   } = useAppState();
 
   const [benchName, setBenchName] = useState('');
@@ -160,7 +189,10 @@ export function AddBenchPanel() {
   const [uploading, setUploading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const [shakeFields, setShakeFields] = useState<Set<string>>(new Set());
+  const [successAnimation, setSuccessAnimation] = useState<'collapse' | 'square' | 'circle' | 'fly' | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   // Escape key cancels location picking
   useEffect(() => {
@@ -249,6 +281,21 @@ export function AddBenchPanel() {
     }
   };
 
+  // Check if form is valid
+  const isFormValid = pickedLocation && benchName.trim() && description.trim() && photos.length > 0;
+
+  // Handle clicking disabled submit button - shake empty fields
+  const handleDisabledClick = () => {
+    const emptyFields = new Set<string>();
+    if (!pickedLocation) emptyFields.add('location');
+    if (!benchName.trim()) emptyFields.add('name');
+    if (!description.trim()) emptyFields.add('description');
+    if (photos.length === 0) emptyFields.add('photos');
+
+    setShakeFields(emptyFields);
+    setTimeout(() => setShakeFields(new Set()), 500);
+  };
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!pickedLocation) {
@@ -280,12 +327,60 @@ export function AddBenchPanel() {
 
       const bench: Bench = await res.json();
       addBench(bench);
-      close();
+
+      // Set transitioning bench for pin animation
+      setTransitioningBenchId(bench.id);
+
+      // Start success animation sequence
+      // Phase 1: Collapse to 60x60 square (width faster than height)
+      setSuccessAnimation('collapse');
+
+      // Phase 2: Already square, now round the corners
+      setTimeout(() => {
+        setSuccessAnimation('square');
+      }, 700);
+
+      // Phase 3: Square becomes circle with bench icon
+      setTimeout(() => {
+        setSuccessAnimation('circle');
+      }, 900);
+
+      // Phase 4: Fly to forum button (north-northwest)
+      setTimeout(() => {
+        setSuccessAnimation('fly');
+      }, 1300);
+
+      // Clear transitioning state so bench marker appears
+      setTimeout(() => {
+        setTransitioningBenchId(null);
+      }, 1550);
+
+      // Trigger forum button pulse and close panel
+      setTimeout(() => {
+        setForumButtonPulse(true);
+        setSuccessAnimation(null);
+        closeWithoutAnimation();
+      }, 1650);
+
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create bench');
-    } finally {
       setSubmitting(false);
     }
+  };
+
+  const closeWithoutAnimation = () => {
+    setShowAddBench(false);
+    setPickingLocation(false);
+    setPickedLocation(null);
+    setBenchName('');
+    setDescription('');
+    setDirections('');
+    setDetectedCountry(null);
+    setIsOcean(false);
+    setPhotos([]);
+    setError('');
+    setSubmitting(false);
+    setSuccessAnimation(null);
   };
 
   const close = () => {
@@ -299,13 +394,146 @@ export function AddBenchPanel() {
     setIsOcean(false);
     setPhotos([]);
     setError('');
+    setSuccessAnimation(null);
   };
 
+  // Show the animated bench icon circle during circle/fly phases
+  const showBenchCircle = successAnimation === 'circle' || successAnimation === 'fly';
+
+  // If we're showing the bench circle, render that instead
+  if (showBenchCircle) {
+    // Circle starts at panel center (right-4 + half panel width, vertically centered)
+    // Then flies to forum button (top-right)
+    const isFlying = successAnimation === 'fly';
+
+    return (
+      <div className="fixed inset-0 z-50 pointer-events-none">
+        <div
+          className="absolute flex items-center justify-center"
+          style={{
+            // Panel container: right-4 (16px), width 380px
+            // Center of container: 16 + 190 = 206px from right
+            // Vertical center: between top-20 (80px) and bottom-4 (16px) = roughly 50%
+            // Subtract half the circle size (30px) to center it
+            // Fly direction: more west (up and more to the left)
+            right: isFlying ? 340 : (16 + 190 - 30),
+            top: isFlying ? 30 : 'calc(50% - 30px + 32px)',
+            width: 60,
+            height: 60,
+            borderRadius: '50%',
+            background: 'linear-gradient(135deg, #c9945a, #8a6535)',
+            boxShadow: isFlying
+              ? '0 0 0 rgba(201,148,90,0)'
+              : '0 4px 20px rgba(201,148,90,0.5)',
+            transform: isFlying ? 'scale(0.5)' : 'scale(1)',
+            opacity: isFlying ? 0 : 1,
+            transition: 'all 0.35s cubic-bezier(0.6, 0, 0.2, 1)',
+          }}
+        >
+          <svg
+            width="28"
+            height="28"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="#17130e"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            style={{
+              opacity: isFlying ? 0 : 1,
+              transition: 'opacity 0.1s ease-out',
+            }}
+          >
+            <path d="M5 6h14" />
+            <path d="M6 6v5" />
+            <path d="M18 6v5" />
+            <path d="M3 11h18" />
+            <path d="M5 11v6" />
+            <path d="M19 11v6" />
+          </svg>
+        </div>
+      </div>
+    );
+  }
+
+  // Panel animation styles for collapse and square phases
+  const getPanelAnimationStyle = () => {
+    // Base styles with explicit dimensions for transitions to work
+    const baseHeight = 'calc(100vh - 96px)'; // Full panel height
+
+    if (successAnimation === 'collapse') {
+      return {
+        width: '60px',
+        height: '60px',
+        padding: 0,
+        overflow: 'hidden',
+        borderRadius: '16px',
+        // Height collapses slower (0.7s) than width (0.35s) so it forms a square
+        transition: 'width 0.35s cubic-bezier(0.4, 0, 0.2, 1), height 0.7s cubic-bezier(0.3, 0, 0.2, 1), border-radius 0.5s ease-out, padding 0.1s ease-out',
+      };
+    }
+    if (successAnimation === 'square') {
+      return {
+        width: '60px',
+        height: '60px',
+        padding: 0,
+        overflow: 'hidden',
+        borderRadius: '50%',
+        background: 'linear-gradient(135deg, #c9945a, #8a6535)',
+        transition: 'border-radius 0.15s ease-out, background 0.15s ease-out',
+      };
+    }
+    // Default: explicit height so transitions work
+    return {
+      width: '380px',
+      height: baseHeight,
+    };
+  };
+
+  const panelAnimationStyle = getPanelAnimationStyle();
+
+  const contentStyle = (successAnimation === 'collapse' || successAnimation === 'square')
+    ? { opacity: 0, transition: 'opacity 0.08s ease-out' }
+    : {};
+
+  const isCollapsing = successAnimation === 'collapse' || successAnimation === 'square';
+
   return (
-    <div className="fixed right-4 bottom-4 top-20 z-40 w-[380px] max-w-[calc(100vw-2rem)] flex">
-      <div className="glass-strong rounded-2xl overflow-hidden flex flex-col animate-slide-right w-full glow-gold">
+    <div className={`fixed right-4 bottom-4 top-20 z-40 max-w-[calc(100vw-2rem)] flex ${isCollapsing ? 'items-center justify-center w-[380px]' : ''}`}>
+      <div
+        ref={panelRef}
+        className={`glass-strong rounded-2xl overflow-hidden flex flex-col animate-slide-right glow-gold relative ${successAnimation ? 'pointer-events-none' : ''}`}
+        style={panelAnimationStyle}
+      >
+        {/* Bench icon that appears during collapse/square */}
+        {isCollapsing && (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <svg
+              width="28"
+              height="28"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="#17130e"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              style={{
+                opacity: successAnimation === 'square' ? 1 : 0,
+                transition: 'opacity 0.15s ease-out',
+              }}
+            >
+              <path d="M5 6h14" />
+              <path d="M6 6v5" />
+              <path d="M18 6v5" />
+              <path d="M3 11h18" />
+              <path d="M5 11v6" />
+              <path d="M19 11v6" />
+            </svg>
+          </div>
+        )}
+
         {/* Header */}
-        <div className="p-5 pb-3 flex-shrink-0">
+        <div className="p-5 pb-3 flex-shrink-0" style={contentStyle}>
           <div className="flex items-center justify-between">
             <h3 className="font-display text-2xl font-semibold text-text-primary">
               Add a Bench
@@ -325,7 +553,7 @@ export function AddBenchPanel() {
         </div>
 
         {/* Form */}
-        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto px-5 pb-5 space-y-4">
+        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto px-5 pb-5 space-y-4" style={contentStyle}>
           {error && (
             <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
               {error}
@@ -333,7 +561,7 @@ export function AddBenchPanel() {
           )}
 
           {/* Location picker */}
-          <div>
+          <div className={shakeFields.has('location') ? 'animate-field-shake' : ''}>
             <label className="block text-sm text-text-secondary mb-1.5 font-medium">
               Location <span className="text-gold">*</span>
             </label>
@@ -395,7 +623,7 @@ export function AddBenchPanel() {
             )}
           </div>
 
-          <div>
+          <div className={shakeFields.has('name') ? 'animate-field-shake' : ''}>
             <label className="block text-sm text-text-secondary mb-1.5 font-medium">
               Bench Name <span className="text-gold">*</span>
             </label>
@@ -409,7 +637,7 @@ export function AddBenchPanel() {
             />
           </div>
 
-          <div>
+          <div className={shakeFields.has('description') ? 'animate-field-shake' : ''}>
             <label className="block text-sm text-text-secondary mb-1.5 font-medium">
               Description <span className="text-gold">*</span>
             </label>
@@ -435,7 +663,7 @@ export function AddBenchPanel() {
           </div>
 
           {/* Photo upload */}
-          <div>
+          <div className={shakeFields.has('photos') ? 'animate-field-shake' : ''}>
             <label className="block text-sm text-text-secondary mb-1.5 font-medium">
               Photos <span className="text-gold">*</span>
             </label>
@@ -475,15 +703,42 @@ export function AddBenchPanel() {
             )}
           </div>
 
-          <button
-            type="submit"
-            disabled={submitting || !pickedLocation || !benchName.trim() || !description.trim() || photos.length === 0}
-            className="btn-gold w-full"
-          >
-            {submitting ? 'Adding...' : 'Add Bench'}
-          </button>
+          <div className="relative">
+            <button
+              type="submit"
+              disabled={submitting || !isFormValid}
+              className="btn-gold w-full"
+            >
+              {submitting ? 'Adding...' : 'Add Bench'}
+            </button>
+            {/* Invisible overlay to catch clicks on disabled button */}
+            {!isFormValid && !submitting && (
+              <div
+                className="absolute inset-0 cursor-pointer"
+                onClick={handleDisabledClick}
+              />
+            )}
+          </div>
         </form>
       </div>
+
+      {/* Field shake animation styles */}
+      <style jsx>{`
+        @keyframes field-shake {
+          0%, 100% { transform: translateX(0); }
+          10%, 30%, 50%, 70%, 90% { transform: translateX(-3px); }
+          20%, 40%, 60%, 80% { transform: translateX(3px); }
+        }
+        :global(.animate-field-shake) {
+          animation: field-shake 0.5s ease-in-out;
+        }
+        :global(.animate-field-shake) :global(input),
+        :global(.animate-field-shake) :global(textarea),
+        :global(.animate-field-shake) :global(button) {
+          border-color: rgba(239, 68, 68, 0.5) !important;
+          box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.2);
+        }
+      `}</style>
     </div>
   );
 }

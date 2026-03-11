@@ -11,11 +11,20 @@ const GlobeScene = dynamic(() => import('@/components/GlobeScene'), { ssr: false
 
 export default function Home() {
   const { data: session } = useSession();
-  const { setBenches, setShowAuth, setAuthMode, setShowAddBench, setFlyTo, zoomLevel, setShouldResumeRotation } = useAppState();
+  const { setBenches, setShowAuth, setAuthMode, setShowAddBench, setFlyTo, zoomLevel, setShouldResumeRotation, forumButtonPulse, setForumButtonPulse } = useAppState();
   const [titleVisible, setTitleVisible] = useState(true);
   const [shakeButton, setShakeButton] = useState<'forum' | 'addBench' | null>(null);
   const [showArrow, setShowArrow] = useState(false);
   const signInRef = useRef<HTMLButtonElement>(null);
+  const forumButtonRef = useRef<HTMLButtonElement>(null);
+
+  // Reset forum button pulse after animation
+  useEffect(() => {
+    if (forumButtonPulse) {
+      const timer = setTimeout(() => setForumButtonPulse(false), 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [forumButtonPulse, setForumButtonPulse]);
 
   useEffect(() => {
     fetch('/api/benches')
@@ -100,9 +109,10 @@ export default function Home() {
       </div>
 
       {/* Top right controls */}
-      <div className="fixed top-6 right-6 z-40 flex items-center gap-3 select-none">
+      <div className="fixed top-6 right-6 z-[999] flex items-center gap-3 select-none">
         {/* Forum Button */}
         <button
+          ref={forumButtonRef}
           onClick={() => session ? console.log('Open Forum') : handleDisabledClick('forum')}
           className={`
             relative flex items-center gap-2 text-sm py-2.5 px-4 rounded-full shadow-lg
@@ -112,6 +122,7 @@ export default function Home() {
               : 'bg-surface/40 text-text-muted/50 cursor-default border border-ridge/30'
             }
             ${shakeButton === 'forum' ? 'animate-shake' : ''}
+            ${forumButtonPulse ? 'animate-forum-pulse' : ''}
           `}
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -245,6 +256,15 @@ export default function Home() {
         }
         .animate-bounce-subtle {
           animation: bounce-subtle 1s ease-in-out infinite;
+        }
+        @keyframes forum-pulse {
+          0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(201, 148, 90, 0.7); }
+          30% { transform: scale(1.15); box-shadow: 0 0 20px 10px rgba(201, 148, 90, 0.4); }
+          60% { transform: scale(1.05); box-shadow: 0 0 10px 5px rgba(201, 148, 90, 0.2); }
+          100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(201, 148, 90, 0); }
+        }
+        .animate-forum-pulse {
+          animation: forum-pulse 1s ease-out;
         }
       `}</style>
     </main>

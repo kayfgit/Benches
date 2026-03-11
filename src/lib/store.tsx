@@ -16,9 +16,15 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [flyTo, setFlyTo] = useState<{ lat: number; lng: number } | null>(null);
   const [zoomLevel, setZoomLevel] = useState(2.8); // Camera distance from center
   const [shouldResumeRotation, setShouldResumeRotation] = useState(false);
+  const [forumButtonPulse, setForumButtonPulse] = useState(false);
+  const [transitioningBenchId, setTransitioningBenchId] = useState<string | null>(null);
 
   const addBench = useCallback((bench: Bench) => {
     setBenches((prev) => [bench, ...prev]);
+  }, []);
+
+  const removeBench = useCallback((benchId: string) => {
+    setBenches((prev) => prev.filter((b) => b.id !== benchId));
   }, []);
 
   return (
@@ -31,10 +37,12 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         pickingLocation, setPickingLocation,
         pickedLocation, setPickedLocation,
         benches, setBenches,
-        addBench,
+        addBench, removeBench,
         flyTo, setFlyTo,
         zoomLevel, setZoomLevel,
         shouldResumeRotation, setShouldResumeRotation,
+        forumButtonPulse, setForumButtonPulse,
+        transitioningBenchId, setTransitioningBenchId,
       }}
     >
       {children}

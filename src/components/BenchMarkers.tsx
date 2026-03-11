@@ -80,10 +80,13 @@ function SingleMarker({
 }) {
   const groupRef = useRef<THREE.Group>(null);
   const { camera } = useThree();
-  const { setSelectedBench } = useAppState();
+  const { setSelectedBench, transitioningBenchId } = useAppState();
   const [visible, setVisible] = useState(true);
   const [hovered, setHovered] = useState(false);
   const handleWheel = useWheelPassthrough();
+
+  // Hide this marker if it's the one being transitioned (the picked location marker shows the animation)
+  const isTransitioning = transitioningBenchId === bench.id;
 
   useFrame(() => {
     if (!groupRef.current) return;
@@ -105,13 +108,16 @@ function SingleMarker({
 
   const baseSize = isSelected ? 26 : 22;
 
+  // Don't render if transitioning (the picked location marker shows the animation instead)
+  const showMarker = visible && !isTransitioning;
+
   return (
     <group ref={groupRef}>
       <Html
         center
         zIndexRange={[0, 0]}
         style={{
-          opacity: visible ? 1 : 0,
+          opacity: showMarker ? 1 : 0,
           transition: 'opacity 0.25s ease',
           pointerEvents: 'none', // Let wheel events pass through
         }}
@@ -127,7 +133,7 @@ function SingleMarker({
           onMouseLeave={() => setHovered(false)}
           style={{
             cursor: 'pointer',
-            pointerEvents: visible ? 'auto' : 'none',
+            pointerEvents: showMarker ? 'auto' : 'none',
           }}
         >
           <div
@@ -197,9 +203,10 @@ function SingleMarker({
 
 /* Picked-location marker (green pin when adding a bench) */
 function PickedLocationMarker() {
-  const { pickedLocation } = useAppState();
+  const { pickedLocation, transitioningBenchId } = useAppState();
   const groupRef = useRef<THREE.Group>(null);
   const handleWheel = useWheelPassthrough();
+  const isTransitioning = transitioningBenchId !== null;
 
   useFrame(() => {
     if (!groupRef.current || !pickedLocation) return;
@@ -209,11 +216,20 @@ function PickedLocationMarker() {
 
   if (!pickedLocation) return null;
 
+  // Colors and styles based on transition state
+  const pinBackground = isTransitioning
+    ? 'linear-gradient(135deg, #c9945a, #8a6535)'
+    : 'linear-gradient(135deg, #a3c2a5, #6b8f6e)';
+  const pinShadow = isTransitioning
+    ? '0 2px 10px rgba(201,148,90,0.45)'
+    : '0 2px 10px rgba(107,143,110,0.45)';
+  const textColor = isTransitioning ? '#c9945a' : '#a3c2a5';
+
   return (
     <group ref={groupRef}>
       <Html center style={{ pointerEvents: 'none' }}>
         <div
-          className="flex flex-col items-center animate-bounce select-none"
+          className={`flex flex-col items-center select-none ${isTransitioning ? '' : 'animate-bounce'}`}
           onWheel={handleWheel}
           style={{ pointerEvents: 'auto' }}
         >
@@ -223,22 +239,55 @@ function PickedLocationMarker() {
               height: 22,
               borderRadius: '50% 50% 50% 3px',
               transform: 'rotate(-45deg)',
-              background: 'linear-gradient(135deg, #a3c2a5, #6b8f6e)',
-              boxShadow: '0 2px 10px rgba(107,143,110,0.45)',
+              background: pinBackground,
+              boxShadow: pinShadow,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
+              transition: 'all 0.5s ease-out',
             }}
           >
+            {/* Plus icon (fades out) */}
             <svg
               viewBox="0 0 24 24"
               fill="none"
               stroke="#17130e"
               strokeWidth="2.5"
               strokeLinecap="round"
-              style={{ width: 10, height: 10, transform: 'rotate(45deg)' }}
+              style={{
+                width: 10,
+                height: 10,
+                transform: 'rotate(45deg)',
+                position: 'absolute',
+                opacity: isTransitioning ? 0 : 1,
+                transition: 'opacity 0.3s ease-out',
+              }}
             >
               <path d="M12 5v14M5 12h14" />
+            </svg>
+            {/* Bench icon (fades in) */}
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke={isTransitioning ? '#17130e' : '#17130e'}
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              style={{
+                width: 12,
+                height: 12,
+                transform: 'rotate(45deg)',
+                position: 'absolute',
+                opacity: isTransitioning ? 1 : 0,
+                transition: 'opacity 0.3s ease-out 0.2s',
+              }}
+            >
+              <path d="M5 6h14" />
+              <path d="M6 6v5" />
+              <path d="M18 6v5" />
+              <path d="M3 11h18" />
+              <path d="M5 11v6" />
+              <path d="M19 11v6" />
             </svg>
           </div>
           <div
@@ -248,7 +297,9 @@ function PickedLocationMarker() {
               border: '1px solid rgba(68,59,48,0.5)',
               fontSize: 9,
               fontFamily: "'JetBrains Mono', monospace",
-              color: '#a3c2a5',
+              color: textColor,
+              opacity: isTransitioning ? 0 : 1,
+              transition: 'all 0.3s ease-out',
             }}
           >
             {pickedLocation.lat.toFixed(4)}, {pickedLocation.lng.toFixed(4)}
