@@ -1,11 +1,27 @@
 'use client';
 
-import { useRef, useCallback, useState } from 'react';
+import { useRef, useCallback, useState, WheelEvent as ReactWheelEvent } from 'react';
 import { useFrame, useThree, ThreeEvent } from '@react-three/fiber';
 import { Html } from '@react-three/drei';
 import * as THREE from 'three';
 import type { Bench } from '@/types';
 import { useAppState } from '@/lib/store';
+
+// Forward wheel events to canvas for zooming
+function useWheelPassthrough() {
+  const { gl } = useThree();
+  return useCallback((e: ReactWheelEvent) => {
+    const canvas = gl.domElement;
+    const wheelEvent = new WheelEvent('wheel', {
+      deltaY: e.deltaY,
+      deltaX: e.deltaX,
+      clientX: e.clientX,
+      clientY: e.clientY,
+      bubbles: true,
+    });
+    canvas.dispatchEvent(wheelEvent);
+  }, [gl]);
+}
 
 const DEG2RAD = Math.PI / 180;
 const GLOBE_RADIUS = 1;
@@ -65,6 +81,7 @@ function SingleMarker({
   const { setSelectedBench } = useAppState();
   const [visible, setVisible] = useState(true);
   const [hovered, setHovered] = useState(false);
+  const handleWheel = useWheelPassthrough();
 
   useFrame(() => {
     if (!groupRef.current) return;
@@ -94,7 +111,7 @@ function SingleMarker({
         style={{
           opacity: visible ? 1 : 0,
           transition: 'opacity 0.25s ease',
-          pointerEvents: visible ? 'auto' : 'none',
+          pointerEvents: 'none', // Let wheel events pass through
         }}
       >
         <div
@@ -103,9 +120,13 @@ function SingleMarker({
             e.stopPropagation();
             setSelectedBench(isSelected ? null : bench);
           }}
+          onWheel={handleWheel}
           onMouseEnter={() => setHovered(true)}
           onMouseLeave={() => setHovered(false)}
-          style={{ cursor: 'pointer' }}
+          style={{
+            cursor: 'pointer',
+            pointerEvents: visible ? 'auto' : 'none',
+          }}
         >
           <div
             className="relative flex items-center justify-center"
