@@ -6,7 +6,6 @@ import { useAppState } from '@/lib/store';
 import { Navbar } from '@/components/Navbar';
 import { AuthModal } from '@/components/AuthModal';
 import { BenchDetailPanel, AddBenchPanel } from '@/components/Panels';
-import { ProjectionToggle } from '@/components/ProjectionToggle';
 
 const GlobeScene = dynamic(() => import('@/components/GlobeScene'), { ssr: false });
 
@@ -37,7 +36,6 @@ export default function Home() {
         </div>
       </div>
 
-      <ProjectionToggle />
       <BenchDetailPanel />
       <AddBenchPanel />
       <AuthModal />

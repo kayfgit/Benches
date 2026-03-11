@@ -6,7 +6,6 @@ import type { AppState, Bench } from '@/types';
 const AppContext = createContext<AppState | null>(null);
 
 export function AppStateProvider({ children }: { children: ReactNode }) {
-  const [morphFactor, setMorphFactor] = useState(0);
   const [selectedBench, setSelectedBench] = useState<Bench | null>(null);
   const [showAuth, setShowAuth] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
@@ -23,7 +22,6 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   return (
     <AppContext.Provider
       value={{
-        morphFactor, setMorphFactor,
         selectedBench, setSelectedBench,
         showAuth, setShowAuth,
         authMode, setAuthMode,

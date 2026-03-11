@@ -1,15 +1,16 @@
 'use client';
 
-import { Suspense, useRef, useEffect } from 'react';
+import { Suspense, useRef, useEffect, useCallback } from 'react';
 import { Canvas, useThree, useFrame } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import { Earth } from './Earth';
 import { CountryBorders } from './CountryBorders';
+import { DetailLayer } from './DetailLayer';
 import { BenchMarkers } from './BenchMarkers';
 import { useAppState } from '@/lib/store';
 
-/* Warm floating dust motes instead of cold stars */
+/* Warm floating dust motes */
 function DustMotes() {
   const ref = useRef<THREE.Points>(null);
   const positions = (() => {
@@ -50,18 +51,74 @@ function DustMotes() {
   );
 }
 
-/*
-  Camera controller that works WITH OrbitControls.
-  On morph toggle it disables controls briefly, snaps the camera
-  to face the flat map head-on, then re-enables controls.
-*/
+/* Custom zoom controller with Ctrl/Shift modifiers + adaptive rotation speed */
+function ZoomController({ controlsRef }: { controlsRef: React.RefObject<any> }) {
+  const { camera, gl } = useThree();
+  const zoomSpeed = useRef(1);
+
+  // Adjust rotation speed based on zoom level (slower when close)
+  useFrame(() => {
+    const controls = controlsRef.current;
+    if (!controls) return;
+
+    const dist = camera.position.length();
+    // At dist=1.08 (closest), speed ~0.05; at dist=3, speed ~0.4; at dist=50, speed ~0.8
+    const rotateSpeed = Math.min(0.8, Math.max(0.05, (dist - 1) * 0.2));
+    controls.rotateSpeed = rotateSpeed;
+  });
+
+  useEffect(() => {
+    const canvas = gl.domElement;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Control') zoomSpeed.current = 3; // Faster
+      if (e.key === 'Shift') zoomSpeed.current = 0.3; // Slower
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'Control' || e.key === 'Shift') {
+        zoomSpeed.current = 1;
+      }
+    };
+
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+
+      const controls = controlsRef.current;
+      if (!controls || !controls.enabled) return;
+
+      // Calculate zoom factor based on current distance and wheel delta
+      const currentDist = camera.position.length();
+      const delta = e.deltaY * 0.001 * zoomSpeed.current;
+
+      // Use exponential zoom for smooth feel at all distances
+      const zoomFactor = Math.exp(delta);
+      const newDist = Math.max(1.08, Math.min(50, currentDist * zoomFactor));
+
+      // Scale camera position to new distance
+      camera.position.normalize().multiplyScalar(newDist);
+      controls.update();
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    canvas.addEventListener('wheel', handleWheel, { passive: false });
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      canvas.removeEventListener('wheel', handleWheel);
+    };
+  }, [camera, gl, controlsRef]);
+
+  return null;
+}
+
+/* Camera controller for fly-to */
 function CameraController({ controlsRef }: { controlsRef: React.RefObject<any> }) {
   const { camera } = useThree();
-  const { morphFactor, flyTo, setFlyTo } = useAppState();
+  const { flyTo, setFlyTo } = useAppState();
   const flyToRef = useRef<{ lat: number; lng: number } | null>(null);
-  const prevMorph = useRef(morphFactor);
-  const animating = useRef(false);
-  const flatTarget = useRef(new THREE.Vector3(0, 0, 3.2));
 
   useEffect(() => {
     if (flyTo) {
@@ -71,40 +128,7 @@ function CameraController({ controlsRef }: { controlsRef: React.RefObject<any> }
   }, [flyTo, setFlyTo]);
 
   useFrame(() => {
-    const controls = controlsRef.current;
-
-    // Detect morph toggle
-    if (Math.abs(morphFactor - prevMorph.current) > 0.5) {
-      animating.current = true;
-      if (controls) controls.enabled = false;
-    }
-    prevMorph.current = morphFactor;
-
-    // Animate camera during morph transition
-    if (animating.current) {
-      if (morphFactor > 0.5) {
-        camera.position.lerp(flatTarget.current, 0.12);
-        camera.up.set(0, 1, 0);
-        if (controls) controls.target.lerp(new THREE.Vector3(0, 0, 0), 0.12);
-        if (camera.position.distanceTo(flatTarget.current) < 0.08) {
-          animating.current = false;
-          if (controls) {
-            controls.enabled = true;
-            controls.update();
-          }
-        }
-      } else {
-        // Going back to globe — just re-enable and let user orbit
-        animating.current = false;
-        if (controls) {
-          controls.enabled = true;
-          controls.update();
-        }
-      }
-    }
-
-    // Fly-to for "Near Me"
-    if (flyToRef.current && morphFactor < 0.1 && !animating.current) {
+    if (flyToRef.current) {
       const { lat, lng } = flyToRef.current;
       const phi = (90 - lat) * (Math.PI / 180);
       const theta = (lng + 180) * (Math.PI / 180);
@@ -125,42 +149,32 @@ function CameraController({ controlsRef }: { controlsRef: React.RefObject<any> }
 }
 
 function SceneContent() {
-  const { morphFactor, benches, pickingLocation } = useAppState();
-  const groupRef = useRef<THREE.Group>(null);
+  const { benches, pickingLocation } = useAppState();
   const controlsRef = useRef<any>(null);
-
-  useFrame(() => {
-    if (groupRef.current) {
-      const targetRotY = -Math.PI / 2 * (1 - morphFactor);
-      groupRef.current.rotation.y += (targetRotY - groupRef.current.rotation.y) * 0.12;
-    }
-  });
 
   return (
     <>
-      {/* Warm, soft lighting like morning sun */}
+      {/* Warm, soft lighting */}
       <ambientLight intensity={0.35} color="#ffe8d0" />
       <directionalLight position={[5, 4, 3]} intensity={0.6} color="#ffd9b3" />
       <directionalLight position={[-3, 2, -2]} intensity={0.15} color="#d4c4a8" />
 
       <DustMotes />
 
-      <group ref={groupRef}>
+      <group>
         <Earth />
         <CountryBorders />
-        <BenchMarkers benches={benches} morphFactor={morphFactor} pickingLocation={pickingLocation} />
+        <DetailLayer />
+        <BenchMarkers benches={benches} pickingLocation={pickingLocation} />
       </group>
 
+      <ZoomController controlsRef={controlsRef} />
       <CameraController controlsRef={controlsRef} />
       <OrbitControls
         ref={controlsRef}
-        enablePan={morphFactor > 0.5}
-        enableRotate={morphFactor < 0.5}
-        enableZoom
-        minDistance={1.5}
-        maxDistance={8}
-        zoomSpeed={0.5}
-        rotateSpeed={0.4}
+        enablePan={false}
+        enableZoom={false} // We handle zoom ourselves
+        enableRotate
         enableDamping
         dampingFactor={0.08}
       />
@@ -183,7 +197,7 @@ export default function GlobeScene() {
   return (
     <div className={`absolute inset-0 ${pickingLocation ? 'cursor-crosshair' : ''}`}>
       <Canvas
-        camera={{ position: [0, 0.3, 2.8], fov: 50, near: 0.1, far: 100 }}
+        camera={{ position: [0, 0.3, 2.8], fov: 50, near: 0.01, far: 100 }}
         gl={{ antialias: true, alpha: true, powerPreference: 'high-performance' }}
         style={{
           background: 'radial-gradient(ellipse at 50% 45%, #2e261e 0%, #1f1a13 40%, #17130e 80%)',

@@ -9,9 +9,6 @@ import { useAppState } from '@/lib/store';
 
 const DEG2RAD = Math.PI / 180;
 const GLOBE_RADIUS = 1;
-const MAP_WIDTH = 3.6;
-const MAX_LAT = 82;
-const maxMercY = Math.log(Math.tan(Math.PI / 4 + (MAX_LAT * DEG2RAD) / 2));
 
 export function latLonToVec3(lat: number, lon: number, radius: number): THREE.Vector3 {
   const phi = (90 - lat) * DEG2RAD;
@@ -20,18 +17,6 @@ export function latLonToVec3(lat: number, lon: number, radius: number): THREE.Ve
     -(radius * Math.sin(phi) * Math.cos(theta)),
     radius * Math.cos(phi),
     radius * Math.sin(phi) * Math.sin(theta)
-  );
-}
-
-function latLonToFlat(lat: number, lon: number): THREE.Vector3 {
-  const u = (lon + 180) / 360;
-  const clamped = Math.max(-MAX_LAT, Math.min(MAX_LAT, lat));
-  const latRad = clamped * DEG2RAD;
-  const mercY = Math.log(Math.tan(Math.PI / 4 + latRad / 2));
-  return new THREE.Vector3(
-    (u - 0.5) * MAP_WIDTH,
-    (mercY / maxMercY) * (MAP_WIDTH / 2) * 0.55,
-    0.02
   );
 }
 
@@ -44,7 +29,7 @@ function vec3ToLatLon(point: THREE.Vector3): { lat: number; lng: number } {
 }
 
 /* Custom bench SVG icon */
-function BenchIcon({ className, style }: { className?: string; style?: React.CSSProperties }) {
+function BenchIcon({ style }: { style?: React.CSSProperties }) {
   return (
     <svg
       viewBox="0 0 24 24"
@@ -53,34 +38,26 @@ function BenchIcon({ className, style }: { className?: string; style?: React.CSS
       strokeWidth="2"
       strokeLinecap="round"
       strokeLinejoin="round"
-      className={className}
       style={style}
     >
-      {/* Back top rail */}
       <path d="M5 6h14" />
-      {/* Back uprights */}
       <path d="M6 6v5" />
       <path d="M18 6v5" />
-      {/* Seat */}
       <path d="M3 11h18" />
-      {/* Legs */}
       <path d="M5 11v6" />
       <path d="M19 11v6" />
-      {/* Armrests */}
       <path d="M3 9h3" />
       <path d="M18 9h3" />
     </svg>
   );
 }
 
-/* A single bench marker rendered as Html overlay */
+/* A single bench marker */
 function SingleMarker({
   bench,
-  morphFactor,
   isSelected,
 }: {
   bench: Bench;
-  morphFactor: number;
   isSelected: boolean;
 }) {
   const groupRef = useRef<THREE.Group>(null);
@@ -88,59 +65,37 @@ function SingleMarker({
   const { setSelectedBench } = useAppState();
   const [visible, setVisible] = useState(true);
   const [hovered, setHovered] = useState(false);
-  const [zoomScale, setZoomScale] = useState(1);
 
   useFrame(() => {
     if (!groupRef.current) return;
 
-    // Position: lerp between globe and flat
-    const spherePos = latLonToVec3(bench.latitude, bench.longitude, GLOBE_RADIUS + 0.02);
-    const flatPos = latLonToFlat(bench.latitude, bench.longitude);
-    groupRef.current.position.lerpVectors(spherePos, flatPos, morphFactor);
+    // Position exactly on globe surface (minimal offset to avoid z-fighting)
+    const pos = latLonToVec3(bench.latitude, bench.longitude, GLOBE_RADIUS + 0.001);
+    groupRef.current.position.copy(pos);
 
     // Occlusion: marker visible if its surface normal faces the camera
-    // Must use world position since the globe group rotates
-    if (morphFactor < 0.5) {
-      // Get marker's actual world position (accounts for parent group rotation)
-      const worldPos = new THREE.Vector3();
-      groupRef.current.getWorldPosition(worldPos);
+    const worldPos = new THREE.Vector3();
+    groupRef.current.getWorldPosition(worldPos);
+    const normal = worldPos.clone().normalize();
+    const toCamera = camera.position.clone().sub(worldPos).normalize();
+    const dot = normal.dot(toCamera);
+    setVisible(dot > 0.15);
 
-      // The surface normal at this point is just the normalized world position
-      // (since globe is centered at origin)
-      const normal = worldPos.clone().normalize();
-
-      // Direction from marker to camera
-      const toCamera = camera.position.clone().sub(worldPos).normalize();
-
-      // Marker is visible if normal faces camera (dot product > 0)
-      const dot = normal.dot(toCamera);
-      setVisible(dot > 0.1); // Small threshold to hide markers right at the horizon
-    } else {
-      setVisible(true);
-    }
-
-    // Inverse zoom scaling: closer camera = smaller pins
-    // Camera distance ranges roughly from 1.5 (close) to 4 (far)
-    const camDist = camera.position.length();
-    // Scale inversely: at distance 4 = scale 1, at distance 1.5 = scale ~0.5
-    const scale = Math.min(1, Math.max(0.5, (camDist - 1) / 3));
-    setZoomScale(scale);
+    // No scaling needed - pins stay fixed screen size
   });
 
-  // Fixed base size (no size change on hover to prevent position shift)
-  const baseSize = isSelected ? 28 : 24;
-  const scaledSize = baseSize * zoomScale;
+  const baseSize = isSelected ? 26 : 22;
 
   return (
     <group ref={groupRef}>
       <Html
         center
+        zIndexRange={[0, 0]}
         style={{
           opacity: visible ? 1 : 0,
           transition: 'opacity 0.25s ease',
           pointerEvents: visible ? 'auto' : 'none',
         }}
-        distanceFactor={2.4}
       >
         <div
           className="flex flex-col items-center select-none"
@@ -152,13 +107,12 @@ function SingleMarker({
           onMouseLeave={() => setHovered(false)}
           style={{ cursor: 'pointer' }}
         >
-          {/* Icon badge */}
           <div
             className="relative flex items-center justify-center"
             style={{
-              width: scaledSize,
-              height: scaledSize,
-              borderRadius: `50% 50% 50% ${Math.max(2, scaledSize * 0.15)}px`,
+              width: baseSize,
+              height: baseSize,
+              borderRadius: `50% 50% 50% ${Math.max(2, baseSize * 0.15)}px`,
               transform: 'rotate(-45deg)',
               transition: 'background 0.2s, box-shadow 0.2s',
               background: isSelected
@@ -183,8 +137,8 @@ function SingleMarker({
             >
               <BenchIcon
                 style={{
-                  width: scaledSize * 0.55,
-                  height: scaledSize * 0.55,
+                  width: baseSize * 0.55,
+                  height: baseSize * 0.55,
                   color: isSelected ? '#17130e' : '#f0e6d8',
                   transition: 'color 0.2s',
                 }}
@@ -192,7 +146,6 @@ function SingleMarker({
             </div>
           </div>
 
-          {/* Name label — show on hover or selected */}
           {(hovered || isSelected) && (
             <div
               className="mt-1 px-1.5 py-0.5 rounded text-center whitespace-nowrap"
@@ -200,7 +153,7 @@ function SingleMarker({
                 background: 'rgba(33,28,21,0.88)',
                 border: '1px solid rgba(68,59,48,0.5)',
                 backdropFilter: 'blur(8px)',
-                fontSize: Math.max(8, 9 * zoomScale),
+                fontSize: 10,
                 fontFamily: "'Outfit', sans-serif",
                 fontWeight: 500,
                 color: '#f0e6d8',
@@ -220,22 +173,21 @@ function SingleMarker({
 }
 
 /* Picked-location marker (green pin when adding a bench) */
-function PickedLocationMarker({ morphFactor }: { morphFactor: number }) {
+function PickedLocationMarker() {
   const { pickedLocation } = useAppState();
   const groupRef = useRef<THREE.Group>(null);
 
   useFrame(() => {
     if (!groupRef.current || !pickedLocation) return;
-    const spherePos = latLonToVec3(pickedLocation.lat, pickedLocation.lng, GLOBE_RADIUS + 0.025);
-    const flatPos = latLonToFlat(pickedLocation.lat, pickedLocation.lng);
-    groupRef.current.position.lerpVectors(spherePos, flatPos, morphFactor);
+    const pos = latLonToVec3(pickedLocation.lat, pickedLocation.lng, GLOBE_RADIUS + 0.001);
+    groupRef.current.position.copy(pos);
   });
 
   if (!pickedLocation) return null;
 
   return (
     <group ref={groupRef}>
-      <Html center distanceFactor={2.4}>
+      <Html center>
         <div className="flex flex-col items-center animate-bounce">
           <div
             style={{
@@ -306,11 +258,9 @@ function GlobeClickHandler() {
 
 export function BenchMarkers({
   benches,
-  morphFactor,
   pickingLocation,
 }: {
   benches: Bench[];
-  morphFactor: number;
   pickingLocation: boolean;
 }) {
   const { selectedBench } = useAppState();
@@ -321,12 +271,11 @@ export function BenchMarkers({
         <SingleMarker
           key={bench.id}
           bench={bench}
-          morphFactor={morphFactor}
           isSelected={selectedBench?.id === bench.id}
         />
       ))}
       {pickingLocation && <GlobeClickHandler />}
-      <PickedLocationMarker morphFactor={morphFactor} />
+      <PickedLocationMarker />
     </group>
   );
 }

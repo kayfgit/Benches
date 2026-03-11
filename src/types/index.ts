@@ -18,8 +18,6 @@ export interface Bench {
 }
 
 export interface AppState {
-  morphFactor: number;
-  setMorphFactor: (v: number) => void;
   selectedBench: Bench | null;
   setSelectedBench: (b: Bench | null) => void;
   showAuth: boolean;
