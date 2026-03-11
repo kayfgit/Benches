@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo } from 'react';
 import * as THREE from 'three';
 // @ts-expect-error topojson-client has no bundled types
 import { feature } from 'topojson-client';
+import { useAppState } from '@/lib/store';
 
 const DEG2RAD = Math.PI / 180;
 const RADIUS = 1.0005; // Minimal offset to avoid z-fighting
@@ -21,6 +22,7 @@ function toGlobe(lat: number, lon: number): [number, number, number] {
 export function CountryBorders() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [geoData, setGeoData] = useState<any>(null);
+  const { setGlobeReady } = useAppState();
 
   useEffect(() => {
     fetch('https://unpkg.com/world-atlas@2/countries-110m.json')
@@ -28,9 +30,14 @@ export function CountryBorders() {
       .then((topology) => {
         const countries = feature(topology, topology.objects.countries);
         setGeoData(countries);
+        // Signal that globe is ready after a brief delay for render
+        setTimeout(() => setGlobeReady(true), 100);
       })
-      .catch(() => {});
-  }, []);
+      .catch(() => {
+        // Still mark as ready on error so UI doesn't hang
+        setGlobeReady(true);
+      });
+  }, [setGlobeReady]);
 
   const geometry = useMemo(() => {
     if (!geoData) return null;

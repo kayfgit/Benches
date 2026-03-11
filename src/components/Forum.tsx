@@ -537,7 +537,7 @@ function IssueDetailView({
 }: {
   issue: Issue;
   onClose: () => void;
-  onStatusChange: (newStatus: string) => void;
+  onStatusChange: (newStatus: 'open' | 'resolved' | 'closed') => void;
   isAdmin: boolean;
 }) {
   const { data: session } = useSession();

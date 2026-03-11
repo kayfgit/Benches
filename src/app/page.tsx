@@ -7,6 +7,7 @@ import { useAppState } from '@/lib/store';
 import { AuthModal } from '@/components/AuthModal';
 import { BenchDetailPanel, AddBenchPanel } from '@/components/Panels';
 import { ForumPanel } from '@/components/Forum';
+import { LoadingScreen } from '@/components/LoadingScreen';
 
 const GlobeScene = dynamic(() => import('@/components/GlobeScene'), { ssr: false });
 
@@ -82,6 +83,7 @@ export default function Home() {
 
   return (
     <main className="relative w-screen h-screen overflow-hidden bg-deep">
+      <LoadingScreen />
       <GlobeScene />
 
       {/* Title - fades out when zoomed in */}

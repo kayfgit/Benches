@@ -71,4 +71,6 @@ export interface AppState {
   setTransitioningBenchId: (id: string | null) => void;
   showForum: boolean;
   setShowForum: (show: boolean) => void;
+  globeReady: boolean;
+  setGlobeReady: (v: boolean) => void;
 }

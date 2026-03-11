@@ -19,6 +19,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [forumButtonPulse, setForumButtonPulse] = useState(false);
   const [transitioningBenchId, setTransitioningBenchId] = useState<string | null>(null);
   const [showForum, setShowForum] = useState(false);
+  const [globeReady, setGlobeReady] = useState(false);
 
   const addBench = useCallback((bench: Bench) => {
     setBenches((prev) => [bench, ...prev]);
@@ -45,6 +46,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         forumButtonPulse, setForumButtonPulse,
         transitioningBenchId, setTransitioningBenchId,
         showForum, setShowForum,
+        globeReady, setGlobeReady,
       }}
     >
       {children}
