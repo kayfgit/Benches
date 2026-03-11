@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useRef, useEffect, useCallback } from 'react';
+import { Suspense, useRef, useEffect } from 'react';
 import { Canvas, useThree, useFrame } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
@@ -130,13 +130,14 @@ function ZoomController({ controlsRef }: { controlsRef: React.RefObject<any> }) 
 
       const currentDist = camera.position.length();
 
-      // Zoom speed inversely proportional to distance (slower when closer)
-      const distanceFactor = Math.max(0.1, (currentDist - 1) * 0.5);
-      const delta = e.deltaY * 0.002 * zoomSpeedMod.current * distanceFactor;
+      // Zoom speed inversely proportional to distance (much slower when very close)
+      const heightAboveSurface = currentDist - 1;
+      const distanceFactor = Math.max(0.05, Math.min(1, heightAboveSurface * 2));
+      const delta = e.deltaY * 0.0015 * zoomSpeedMod.current * distanceFactor;
       const zoomFactor = Math.exp(delta);
 
-      // Min distance 1.002, max 50
-      const newDist = Math.max(1.002, Math.min(50, currentDist * zoomFactor));
+      // Min distance 1.01 (1% above surface), max 50
+      const newDist = Math.max(1.01, Math.min(50, currentDist * zoomFactor));
       const zoomingIn = newDist < currentDist;
 
       // Get mouse position in normalized device coordinates (-1 to +1)
@@ -149,18 +150,24 @@ function ZoomController({ controlsRef }: { controlsRef: React.RefObject<any> }) 
       const intersectPoint = new THREE.Vector3();
       const hit = raycaster.current.ray.intersectSphere(globeSphere.current, intersectPoint);
 
-      if (hit && zoomingIn && currentDist < 8) {
-        // Zoom towards cursor: rotate camera around origin towards cursor point
+      if (hit && currentDist < 8) {
         const currentDir = camera.position.clone().normalize();
         const cursorDir = intersectPoint.clone().normalize();
 
-        // Interpolate direction towards cursor
-        const lerpAmount = Math.min(0.4, (1 - newDist / currentDist) * 2.5);
-        const newDir = currentDir.clone().lerp(cursorDir, lerpAmount).normalize();
-
-        targetCameraPos.current.copy(newDir.multiplyScalar(newDist));
+        if (zoomingIn) {
+          // Zoom in: rotate camera towards cursor point
+          const lerpAmount = Math.min(0.4, (1 - newDist / currentDist) * 2.5);
+          const newDir = currentDir.clone().lerp(cursorDir, lerpAmount).normalize();
+          targetCameraPos.current.copy(newDir.multiplyScalar(newDist));
+        } else {
+          // Zoom out: rotate camera away from cursor point (reverse direction)
+          const lerpAmount = Math.min(0.3, (newDist / currentDist - 1) * 2);
+          // Lerp in opposite direction: away from cursor
+          const awayDir = currentDir.clone().lerp(cursorDir, -lerpAmount).normalize();
+          targetCameraPos.current.copy(awayDir.multiplyScalar(newDist));
+        }
       } else {
-        // Zooming out or no hit - just scale distance
+        // No hit or too far - just scale distance
         targetCameraPos.current.copy(camera.position).normalize().multiplyScalar(newDist);
       }
 
@@ -181,34 +188,135 @@ function ZoomController({ controlsRef }: { controlsRef: React.RefObject<any> }) 
   return null;
 }
 
-/* Camera controller for fly-to */
+/* Camera controller for fly-to + zoom level tracking */
 function CameraController({ controlsRef }: { controlsRef: React.RefObject<any> }) {
   const { camera } = useThree();
-  const { flyTo, setFlyTo } = useAppState();
-  const flyToRef = useRef<{ lat: number; lng: number } | null>(null);
+  const { flyTo, setFlyTo, setZoomLevel } = useAppState();
+  const flyToRef = useRef<{ lat: number; lng: number; phase: 'rotate' | 'zoom'; targetDir: THREE.Vector3 } | null>(null);
+  const lastZoomUpdate = useRef(0);
+  const targetDistance = 1.15; // How close to zoom in when flying to location
 
   useEffect(() => {
     if (flyTo) {
-      flyToRef.current = flyTo;
+      // Pre-calculate target direction
+      const phi = (90 - flyTo.lat) * (Math.PI / 180);
+      const theta = (flyTo.lng + 180) * (Math.PI / 180);
+      const targetDir = new THREE.Vector3(
+        -(Math.sin(phi) * Math.cos(theta)),
+        Math.cos(phi),
+        Math.sin(phi) * Math.sin(theta)
+      ).normalize();
+
+      flyToRef.current = { ...flyTo, phase: 'rotate', targetDir };
       setFlyTo(null);
     }
   }, [flyTo, setFlyTo]);
 
   useFrame(() => {
+    // Update zoom level in store (throttled to avoid excessive re-renders)
+    const currentDist = camera.position.length();
+    const now = Date.now();
+    if (now - lastZoomUpdate.current > 100) {
+      lastZoomUpdate.current = now;
+      setZoomLevel(currentDist);
+    }
+
+    // Handle fly-to animation
     if (flyToRef.current) {
-      const { lat, lng } = flyToRef.current;
-      const phi = (90 - lat) * (Math.PI / 180);
-      const theta = (lng + 180) * (Math.PI / 180);
-      const r = camera.position.length();
-      const target = new THREE.Vector3(
-        -(r * Math.sin(phi) * Math.cos(theta)),
-        r * Math.cos(phi),
-        r * Math.sin(phi) * Math.sin(theta)
-      );
-      camera.position.lerp(target, 0.04);
-      if (camera.position.distanceTo(target) < 0.05) {
-        flyToRef.current = null;
+      const { phase, targetDir } = flyToRef.current;
+      const currentDist = camera.position.length();
+
+      if (phase === 'rotate') {
+        // Phase 1: Rotate to face the target location
+        const currentDir = camera.position.clone().normalize();
+
+        // Check alignment BEFORE lerping
+        const alignment = currentDir.dot(targetDir);
+
+        // Lerp direction towards target (clone to avoid mutation)
+        const newDir = currentDir.clone().lerp(targetDir, 0.05).normalize();
+        camera.position.copy(newDir.multiplyScalar(currentDist));
+
+        // Move to zoom phase when facing target
+        if (alignment > 0.99) {
+          flyToRef.current.phase = 'zoom';
+        }
+      } else {
+        // Phase 2: Zoom in to the target while maintaining direction
+        const currentDir = camera.position.clone().normalize();
+
+        // Keep rotating slightly towards target while zooming
+        const newDir = currentDir.clone().lerp(flyToRef.current.targetDir, 0.03).normalize();
+        const newDist = currentDist + (targetDistance - currentDist) * 0.05;
+
+        camera.position.copy(newDir.multiplyScalar(newDist));
+
+        // Done when close enough to target distance
+        if (Math.abs(currentDist - targetDistance) < 0.03) {
+          flyToRef.current = null;
+        }
       }
+
+      if (controlsRef.current) {
+        controlsRef.current.update();
+      }
+    }
+  });
+
+  return null;
+}
+
+/* Auto-rotation that stops on user interaction, can be resumed */
+function AutoRotation({ controlsRef }: { controlsRef: React.RefObject<any> }) {
+  const { camera } = useThree();
+  const { shouldResumeRotation, setShouldResumeRotation } = useAppState();
+  const isRotating = useRef(true);
+  const rotationSpeed = 0.0003; // Very slow rotation
+
+  // Resume rotation when triggered
+  useEffect(() => {
+    if (shouldResumeRotation) {
+      isRotating.current = true;
+      setShouldResumeRotation(false);
+    }
+  }, [shouldResumeRotation, setShouldResumeRotation]);
+
+  // Stop rotation on any user interaction
+  useEffect(() => {
+    const stopRotation = () => {
+      isRotating.current = false;
+    };
+
+    window.addEventListener('mousedown', stopRotation);
+    window.addEventListener('wheel', stopRotation);
+    window.addEventListener('touchstart', stopRotation);
+    window.addEventListener('keydown', stopRotation);
+
+    return () => {
+      window.removeEventListener('mousedown', stopRotation);
+      window.removeEventListener('wheel', stopRotation);
+      window.removeEventListener('touchstart', stopRotation);
+      window.removeEventListener('keydown', stopRotation);
+    };
+  }, []);
+
+  useFrame(() => {
+    if (!isRotating.current) return;
+
+    // Rotate camera around Y axis (globe's up axis)
+    const currentAngle = Math.atan2(camera.position.x, camera.position.z);
+    const newAngle = currentAngle + rotationSpeed;
+
+    // Maintain current height (Y) while rotating around
+    const horizontalDist = Math.sqrt(
+      camera.position.x * camera.position.x + camera.position.z * camera.position.z
+    );
+
+    camera.position.x = Math.sin(newAngle) * horizontalDist;
+    camera.position.z = Math.cos(newAngle) * horizontalDist;
+
+    if (controlsRef.current) {
+      controlsRef.current.update();
     }
   });
 
@@ -235,6 +343,7 @@ function SceneContent() {
         <BenchMarkers benches={benches} pickingLocation={pickingLocation} />
       </group>
 
+      <AutoRotation controlsRef={controlsRef} />
       <ZoomController controlsRef={controlsRef} />
       <CameraController controlsRef={controlsRef} />
       <OrbitControls

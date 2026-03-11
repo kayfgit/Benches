@@ -14,6 +14,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [pickedLocation, setPickedLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [benches, setBenches] = useState<Bench[]>([]);
   const [flyTo, setFlyTo] = useState<{ lat: number; lng: number } | null>(null);
+  const [zoomLevel, setZoomLevel] = useState(2.8); // Camera distance from center
+  const [shouldResumeRotation, setShouldResumeRotation] = useState(false);
 
   const addBench = useCallback((bench: Bench) => {
     setBenches((prev) => [bench, ...prev]);
@@ -31,6 +33,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         benches, setBenches,
         addBench,
         flyTo, setFlyTo,
+        zoomLevel, setZoomLevel,
+        shouldResumeRotation, setShouldResumeRotation,
       }}
     >
       {children}

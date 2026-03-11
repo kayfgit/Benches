@@ -35,4 +35,8 @@ export interface AppState {
   addBench: (b: Bench) => void;
   flyTo: { lat: number; lng: number } | null;
   setFlyTo: (loc: { lat: number; lng: number } | null) => void;
+  zoomLevel: number;
+  setZoomLevel: (level: number) => void;
+  shouldResumeRotation: boolean;
+  setShouldResumeRotation: (v: boolean) => void;
 }

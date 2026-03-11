@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { feature } from 'topojson-client';
 
 const DEG2RAD = Math.PI / 180;
-const RADIUS = 1.002; // Slightly above sphere surface to avoid z-fighting
+const RADIUS = 1.0005; // Minimal offset to avoid z-fighting
 
 function toGlobe(lat: number, lon: number): [number, number, number] {
   const phi = (90 - lat) * DEG2RAD;
@@ -72,6 +72,9 @@ export function CountryBorders() {
         transparent
         opacity={0.18}
         depthWrite={false}
+        polygonOffset
+        polygonOffsetFactor={-1}
+        polygonOffsetUnits={-1}
       />
     </lineSegments>
   );
