@@ -20,6 +20,7 @@ model Bench {
   id          String   @id @default(cuid())
   name        String
   description String
+  directions  String   @default("")
   latitude    Float
   longitude   Float
   country     String   @default("")

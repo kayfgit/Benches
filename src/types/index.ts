@@ -7,6 +7,7 @@ export interface Bench {
   id: string;
   name: string;
   description: string;
+  directions?: string;
   latitude: number;
   longitude: number;
   country: string;

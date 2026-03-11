@@ -76,7 +76,7 @@ export default function Home() {
 
       {/* Title - fades out when zoomed in */}
       <div
-        className="fixed top-6 left-6 z-40 transition-all duration-500"
+        className="fixed top-6 left-6 z-40 transition-all duration-500 select-none"
         style={{
           opacity: titleVisible ? 1 : 0,
           transform: titleVisible ? 'translateY(0)' : 'translateY(-20px)',
@@ -100,16 +100,16 @@ export default function Home() {
       </div>
 
       {/* Top right controls */}
-      <div className="fixed top-6 right-6 z-40 flex items-center gap-3">
+      <div className="fixed top-6 right-6 z-40 flex items-center gap-3 select-none">
         {/* Forum Button */}
         <button
           onClick={() => session ? console.log('Open Forum') : handleDisabledClick('forum')}
           className={`
             relative flex items-center gap-2 text-sm py-2.5 px-4 rounded-full shadow-lg
-            transition-all duration-200
+            transition-all duration-200 outline-none focus:outline-none
             ${session
               ? 'glass-strong hover:bg-elevated/80 text-text-primary cursor-pointer'
-              : 'bg-surface/40 text-text-muted/50 cursor-not-allowed border border-ridge/30'
+              : 'bg-surface/40 text-text-muted/50 cursor-default border border-ridge/30'
             }
             ${shakeButton === 'forum' ? 'animate-shake' : ''}
           `}
@@ -127,10 +127,10 @@ export default function Home() {
           onClick={() => session ? setShowAddBench(true) : handleDisabledClick('addBench')}
           className={`
             relative flex items-center gap-2 text-sm py-2.5 px-4 rounded-full shadow-lg
-            transition-all duration-200
+            transition-all duration-200 outline-none focus:outline-none
             ${session
               ? 'glass-strong hover:bg-elevated/80 text-text-primary cursor-pointer'
-              : 'bg-surface/40 text-text-muted/50 cursor-not-allowed border border-ridge/30'
+              : 'bg-surface/40 text-text-muted/50 cursor-default border border-ridge/30'
             }
             ${shakeButton === 'addBench' ? 'animate-shake' : ''}
           `}
@@ -165,7 +165,7 @@ export default function Home() {
               </span>
               <button
                 onClick={() => signOut()}
-                className="text-text-muted hover:text-text-primary transition-colors text-sm ml-1"
+                className="text-text-muted hover:text-text-primary transition-colors text-sm ml-1 outline-none focus:outline-none"
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
@@ -184,7 +184,7 @@ export default function Home() {
             }}
             className={`
               btn-gold text-sm py-2.5 px-5 rounded-full shadow-lg
-              flex items-center gap-2 transition-all
+              flex items-center gap-2 transition-all outline-none focus:outline-none
               ${showArrow ? 'ring-2 ring-gold/50 ring-offset-2 ring-offset-deep scale-105' : ''}
             `}
           >
@@ -202,7 +202,7 @@ export default function Home() {
       <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-40">
         <button
           onClick={handleNearMe}
-          className="glass-strong rounded-full px-6 py-3.5 flex items-center gap-3 shadow-xl hover:bg-elevated/80 transition-all group border border-ridge/30"
+          className="glass-strong rounded-full px-6 py-3.5 flex items-center gap-3 shadow-xl hover:bg-elevated/80 transition-all group border border-ridge/30 outline-none focus:outline-none select-none"
           title="Find benches near you"
         >
           <div className="w-8 h-8 rounded-full bg-gradient-to-br from-gold/20 to-gold-light/20 flex items-center justify-center group-hover:from-gold/30 group-hover:to-gold-light/30 transition-all">

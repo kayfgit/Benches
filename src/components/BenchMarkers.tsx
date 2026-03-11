@@ -39,7 +39,9 @@ export function latLonToVec3(lat: number, lon: number, radius: number): THREE.Ve
 function vec3ToLatLon(point: THREE.Vector3): { lat: number; lng: number } {
   const r = point.length();
   const lat = 90 - Math.acos(point.y / r) * (180 / Math.PI);
-  const lng = -Math.atan2(-point.z, point.x) * (180 / Math.PI) - 180;
+  // Inverse of latLonToVec3: theta = atan2(z, -x), lon = theta * RAD2DEG - 180
+  const theta = Math.atan2(point.z, -point.x);
+  const lng = theta * (180 / Math.PI) - 180;
   const normalizedLng = ((lng + 540) % 360) - 180;
   return { lat, lng: normalizedLng };
 }
@@ -197,6 +199,7 @@ function SingleMarker({
 function PickedLocationMarker() {
   const { pickedLocation } = useAppState();
   const groupRef = useRef<THREE.Group>(null);
+  const handleWheel = useWheelPassthrough();
 
   useFrame(() => {
     if (!groupRef.current || !pickedLocation) return;
@@ -208,8 +211,12 @@ function PickedLocationMarker() {
 
   return (
     <group ref={groupRef}>
-      <Html center>
-        <div className="flex flex-col items-center animate-bounce">
+      <Html center style={{ pointerEvents: 'none' }}>
+        <div
+          className="flex flex-col items-center animate-bounce select-none"
+          onWheel={handleWheel}
+          style={{ pointerEvents: 'auto' }}
+        >
           <div
             style={{
               width: 22,
@@ -254,7 +261,7 @@ function PickedLocationMarker() {
 
 /* Invisible sphere for click-to-pick */
 function GlobeClickHandler() {
-  const { pickingLocation, setPickedLocation } = useAppState();
+  const { pickingLocation, setPickingLocation, setPickedLocation } = useAppState();
 
   const handleClick = useCallback(
     (e: ThreeEvent<MouseEvent>) => {
@@ -265,8 +272,10 @@ function GlobeClickHandler() {
         lat: Math.round(lat * 10000) / 10000,
         lng: Math.round(lng * 10000) / 10000,
       });
+      // Auto-toggle off picking mode after selecting
+      setPickingLocation(false);
     },
-    [pickingLocation, setPickedLocation]
+    [pickingLocation, setPickingLocation, setPickedLocation]
   );
 
   return (

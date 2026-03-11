@@ -17,6 +17,7 @@ export async function GET() {
       id: b.id,
       name: b.name,
       description: b.description,
+      directions: b.directions,
       latitude: b.latitude,
       longitude: b.longitude,
       country: b.country,
@@ -41,7 +42,7 @@ export async function POST(request: Request) {
     }
 
     const userId = (session.user as Record<string, unknown>).id as string;
-    const { name, description, latitude, longitude, country, altitude, photoUrls } = await request.json();
+    const { name, description, directions, latitude, longitude, country, altitude, photoUrls } = await request.json();
 
     if (!name || !description || latitude == null || longitude == null) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
@@ -51,6 +52,7 @@ export async function POST(request: Request) {
       data: {
         name,
         description,
+        directions: directions || '',
         latitude,
         longitude,
         country: country || '',
@@ -70,6 +72,7 @@ export async function POST(request: Request) {
       id: bench.id,
       name: bench.name,
       description: bench.description,
+      directions: bench.directions,
       latitude: bench.latitude,
       longitude: bench.longitude,
       country: bench.country,

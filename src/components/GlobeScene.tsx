@@ -353,6 +353,11 @@ function SceneContent() {
         enableRotate
         enableDamping
         dampingFactor={0.08}
+        mouseButtons={{
+          LEFT: THREE.MOUSE.ROTATE,
+          MIDDLE: THREE.MOUSE.ROTATE,
+          RIGHT: THREE.MOUSE.ROTATE,
+        }}
       />
     </>
   );

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, FormEvent, useRef } from 'react';
+import { useState, FormEvent, useRef, useEffect } from 'react';
 import { useSession } from 'next-auth/react';
 import { useAppState } from '@/lib/store';
 import type { Bench } from '@/types';
@@ -67,6 +67,23 @@ export function BenchDetailPanel() {
           <p className="text-text-secondary text-sm leading-relaxed">
             {selectedBench.description}
           </p>
+
+          {/* Directions */}
+          {selectedBench.directions && (
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-1.5 text-xs text-text-muted font-medium">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <path d="M12 2L2 7l10 5 10-5-10-5z" />
+                  <path d="M2 17l10 5 10-5" />
+                  <path d="M2 12l10 5 10-5" />
+                </svg>
+                How to get there
+              </div>
+              <p className="text-text-secondary text-sm leading-relaxed">
+                {selectedBench.directions}
+              </p>
+            </div>
+          )}
 
           {/* Meta */}
           <div className="space-y-2 pt-2 border-t border-ridge/50">
@@ -135,12 +152,78 @@ export function AddBenchPanel() {
 
   const [benchName, setBenchName] = useState('');
   const [description, setDescription] = useState('');
-  const [country, setCountry] = useState('');
+  const [directions, setDirections] = useState('');
+  const [detectedCountry, setDetectedCountry] = useState<string | null>(null);
+  const [isOcean, setIsOcean] = useState(false);
+  const [detectingLocation, setDetectingLocation] = useState(false);
   const [photos, setPhotos] = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // Escape key cancels location picking
+  useEffect(() => {
+    if (!pickingLocation) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setPickingLocation(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [pickingLocation, setPickingLocation]);
+
+  // Auto-detect location from coordinates
+  useEffect(() => {
+    if (!pickedLocation) {
+      setDetectedCountry(null);
+      setIsOcean(false);
+      return;
+    }
+
+    const detectLocation = async () => {
+      setDetectingLocation(true);
+      setIsOcean(false);
+      setDetectedCountry(null);
+
+      try {
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/reverse?lat=${pickedLocation.lat}&lon=${pickedLocation.lng}&format=json`,
+          { headers: { 'Accept-Language': 'en' } }
+        );
+        const data = await res.json();
+
+        if (data.error || !data.address) {
+          // Likely ocean or uninhabited area
+          setIsOcean(true);
+          setDetectedCountry(null);
+        } else {
+          const addr = data.address;
+          // Build location string: Country, State/Province, City
+          const parts: string[] = [];
+          if (addr.country) parts.push(addr.country);
+          if (addr.state || addr.region || addr.province) {
+            parts.push(addr.state || addr.region || addr.province);
+          }
+          if (addr.city || addr.town || addr.village || addr.municipality) {
+            parts.push(addr.city || addr.town || addr.village || addr.municipality);
+          }
+          setDetectedCountry(parts.length > 0 ? parts.join(', ') : null);
+          setIsOcean(false);
+        }
+      } catch {
+        // Network error - don't show ocean warning, just no location
+        setDetectedCountry(null);
+      } finally {
+        setDetectingLocation(false);
+      }
+    };
+
+    detectLocation();
+  }, [pickedLocation]);
 
   if (!showAddBench || !session) return null;
 
@@ -182,9 +265,10 @@ export function AddBenchPanel() {
         body: JSON.stringify({
           name: benchName,
           description,
+          directions,
           latitude: pickedLocation.lat,
           longitude: pickedLocation.lng,
-          country,
+          country: detectedCountry || '',
           photoUrls: photos,
         }),
       });
@@ -210,7 +294,9 @@ export function AddBenchPanel() {
     setPickedLocation(null);
     setBenchName('');
     setDescription('');
-    setCountry('');
+    setDirections('');
+    setDetectedCountry(null);
+    setIsOcean(false);
     setPhotos([]);
     setError('');
   };
@@ -249,44 +335,69 @@ export function AddBenchPanel() {
           {/* Location picker */}
           <div>
             <label className="block text-sm text-text-secondary mb-1.5 font-medium">
-              Location
+              Location <span className="text-gold">*</span>
             </label>
             {pickedLocation ? (
-              <div className="flex items-center gap-2">
-                <span className="font-mono text-sm text-sage-light bg-sage/10 px-3 py-1.5 rounded-lg">
-                  {pickedLocation.lat.toFixed(4)}, {pickedLocation.lng.toFixed(4)}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPickingLocation(true);
-                    setPickedLocation(null);
-                  }}
-                  className="text-xs text-text-muted hover:text-text-secondary"
-                >
-                  Re-pick
-                </button>
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-sm text-sage-light bg-sage/10 px-3 py-1.5 rounded-lg">
+                    {pickedLocation.lat.toFixed(4)}, {pickedLocation.lng.toFixed(4)}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPickingLocation(true);
+                      setPickedLocation(null);
+                    }}
+                    className="text-xs text-text-muted hover:text-text-secondary"
+                  >
+                    Re-pick
+                  </button>
+                </div>
+                {/* Country badge or ocean warning */}
+                {detectingLocation ? (
+                  <span className="text-xs text-text-muted">Detecting location...</span>
+                ) : isOcean ? (
+                  <div className="flex items-center gap-1.5 text-xs text-amber-400">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                      <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                      <path d="M12 9v4M12 17h.01" />
+                    </svg>
+                    This appears to be in the ocean or uninhabited area
+                  </div>
+                ) : detectedCountry ? (
+                  <span className="inline-block text-xs font-mono text-gold bg-gold/10 px-2 py-0.5 rounded-full">
+                    {detectedCountry}
+                  </span>
+                ) : null}
               </div>
             ) : (
-              <button
-                type="button"
-                onClick={() => setPickingLocation(true)}
-                className={`btn-ghost w-full text-left text-sm ${
-                  pickingLocation
-                    ? 'border-sage text-sage-light'
-                    : ''
-                }`}
-              >
-                {pickingLocation
-                  ? 'Click on the globe to set location...'
-                  : 'Pick location on globe'}
-              </button>
+              <div className="space-y-1">
+                <button
+                  type="button"
+                  onClick={() => setPickingLocation(true)}
+                  className={`btn-ghost w-full text-left text-sm ${
+                    pickingLocation
+                      ? 'border-sage text-sage-light'
+                      : ''
+                  }`}
+                >
+                  {pickingLocation
+                    ? 'Waiting for location...'
+                    : 'Pick location on globe'}
+                </button>
+                {pickingLocation && (
+                  <p className="text-xs text-text-muted">
+                    Click on the globe or press <kbd className="px-1 py-0.5 rounded bg-surface text-text-secondary">Esc</kbd> to cancel
+                  </p>
+                )}
+              </div>
             )}
           </div>
 
           <div>
             <label className="block text-sm text-text-secondary mb-1.5 font-medium">
-              Bench Name
+              Bench Name <span className="text-gold">*</span>
             </label>
             <input
               type="text"
@@ -300,7 +411,7 @@ export function AddBenchPanel() {
 
           <div>
             <label className="block text-sm text-text-secondary mb-1.5 font-medium">
-              Description
+              Description <span className="text-gold">*</span>
             </label>
             <textarea
               value={description}
@@ -313,21 +424,20 @@ export function AddBenchPanel() {
 
           <div>
             <label className="block text-sm text-text-secondary mb-1.5 font-medium">
-              Country
+              How to get there <span className="text-text-muted font-normal">(optional)</span>
             </label>
-            <input
-              type="text"
-              value={country}
-              onChange={(e) => setCountry(e.target.value)}
-              className="input-field"
-              placeholder="e.g. Switzerland"
+            <textarea
+              value={directions}
+              onChange={(e) => setDirections(e.target.value)}
+              className="input-field min-h-[60px] resize-none"
+              placeholder="Describe the path, trail, or directions to reach this bench..."
             />
           </div>
 
           {/* Photo upload */}
           <div>
             <label className="block text-sm text-text-secondary mb-1.5 font-medium">
-              Photos
+              Photos <span className="text-gold">*</span>
             </label>
             <input
               type="file"
@@ -367,7 +477,7 @@ export function AddBenchPanel() {
 
           <button
             type="submit"
-            disabled={submitting || !pickedLocation}
+            disabled={submitting || !pickedLocation || !benchName.trim() || !description.trim() || photos.length === 0}
             className="btn-gold w-full"
           >
             {submitting ? 'Adding...' : 'Add Bench'}
