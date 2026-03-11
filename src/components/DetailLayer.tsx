@@ -5,7 +5,7 @@ import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 
 const DEG2RAD = Math.PI / 180;
-const RADIUS = 1.0008; // Slightly above country borders
+const RADIUS = 1.0003; // Slightly above streets
 
 // Natural Earth data URLs
 const DATA_URLS = {

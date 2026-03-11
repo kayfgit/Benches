@@ -7,7 +7,7 @@ import { feature } from 'topojson-client';
 import { useAppState } from '@/lib/store';
 
 const DEG2RAD = Math.PI / 180;
-const RADIUS = 1.0005; // Minimal offset to avoid z-fighting
+const RADIUS = 1.0001; // Minimal offset to avoid z-fighting
 
 function toGlobe(lat: number, lon: number): [number, number, number] {
   const phi = (90 - lat) * DEG2RAD;

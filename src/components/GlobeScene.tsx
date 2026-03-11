@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { Earth } from './Earth';
 import { CountryBorders } from './CountryBorders';
 import { DetailLayer } from './DetailLayer';
+import { StreetTiles } from './StreetTiles';
 import { BenchMarkers } from './BenchMarkers';
 import { useAppState } from '@/lib/store';
 
@@ -136,8 +137,8 @@ function ZoomController({ controlsRef }: { controlsRef: React.RefObject<any> }) 
       const delta = e.deltaY * 0.0015 * zoomSpeedMod.current * distanceFactor;
       const zoomFactor = Math.exp(delta);
 
-      // Min distance 1.01 (1% above surface), max 50
-      const newDist = Math.max(1.01, Math.min(50, currentDist * zoomFactor));
+      // Min distance 1.002 (0.2% above surface for street-level view), max 50
+      const newDist = Math.max(1.002, Math.min(50, currentDist * zoomFactor));
       const zoomingIn = newDist < currentDist;
 
       // Get mouse position in normalized device coordinates (-1 to +1)
@@ -340,6 +341,7 @@ function SceneContent() {
         <Earth />
         <CountryBorders />
         <DetailLayer />
+        <StreetTiles />
         <BenchMarkers benches={benches} pickingLocation={pickingLocation} />
       </group>
 

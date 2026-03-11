@@ -25,6 +25,7 @@ function useWheelPassthrough() {
 
 const DEG2RAD = Math.PI / 180;
 const GLOBE_RADIUS = 1;
+const MARKER_HEIGHT = 0.0004; // Minimal offset above other layers for precision
 
 export function latLonToVec3(lat: number, lon: number, radius: number): THREE.Vector3 {
   const phi = (90 - lat) * DEG2RAD;
@@ -92,7 +93,7 @@ function SingleMarker({
     if (!groupRef.current) return;
 
     // Position exactly on globe surface (minimal offset to avoid z-fighting)
-    const pos = latLonToVec3(bench.latitude, bench.longitude, GLOBE_RADIUS + 0.001);
+    const pos = latLonToVec3(bench.latitude, bench.longitude, GLOBE_RADIUS + MARKER_HEIGHT);
     groupRef.current.position.copy(pos);
 
     // Occlusion: marker visible if its surface normal faces the camera
@@ -210,7 +211,7 @@ function PickedLocationMarker() {
 
   useFrame(() => {
     if (!groupRef.current || !pickedLocation) return;
-    const pos = latLonToVec3(pickedLocation.lat, pickedLocation.lng, GLOBE_RADIUS + 0.001);
+    const pos = latLonToVec3(pickedLocation.lat, pickedLocation.lng, GLOBE_RADIUS + MARKER_HEIGHT);
     groupRef.current.position.copy(pos);
   });
 
@@ -331,7 +332,7 @@ function GlobeClickHandler() {
 
   return (
     <mesh visible={false} onClick={handleClick}>
-      <sphereGeometry args={[GLOBE_RADIUS + 0.001, 64, 32]} />
+      <sphereGeometry args={[GLOBE_RADIUS + MARKER_HEIGHT, 64, 32]} />
       <meshBasicMaterial transparent opacity={0} />
     </mesh>
   );
