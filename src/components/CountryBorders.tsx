@@ -7,7 +7,31 @@ import { feature } from 'topojson-client';
 import { useAppState } from '@/lib/store';
 
 const DEG2RAD = Math.PI / 180;
-const RADIUS = 1.0001; // Minimal offset to avoid z-fighting
+const RADIUS = 1.0; // Exact sphere radius - no offset needed with depth bias
+
+// Vertex shader - passes through position and computes clip-space depth
+const BORDER_VERTEX = /* glsl */ `
+  varying float vDepth;
+
+  void main() {
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    vDepth = gl_Position.z / gl_Position.w;
+  }
+`;
+
+// Fragment shader - applies depth bias to avoid z-fighting without moving geometry
+const BORDER_FRAGMENT = /* glsl */ `
+  varying float vDepth;
+  uniform vec3 uColor;
+  uniform float uOpacity;
+
+  void main() {
+    gl_FragColor = vec4(uColor, uOpacity);
+    // Bias depth slightly toward camera to win depth test against sphere
+    // This is in NDC space [-1,1], a tiny bias is sufficient
+    gl_FragDepth = gl_FragCoord.z - 0.00001;
+  }
+`;
 
 function toGlobe(lat: number, lon: number): [number, number, number] {
   const phi = (90 - lat) * DEG2RAD;
@@ -70,19 +94,22 @@ export function CountryBorders() {
     return geo;
   }, [geoData]);
 
+  const material = useMemo(() => {
+    return new THREE.ShaderMaterial({
+      vertexShader: BORDER_VERTEX,
+      fragmentShader: BORDER_FRAGMENT,
+      uniforms: {
+        uColor: { value: new THREE.Color('#f0e6d3') },
+        uOpacity: { value: 0.18 },
+      },
+      transparent: true,
+      depthWrite: false,
+    });
+  }, []);
+
   if (!geometry) return null;
 
   return (
-    <lineSegments geometry={geometry}>
-      <lineBasicMaterial
-        color="#f0e6d3"
-        transparent
-        opacity={0.18}
-        depthWrite={false}
-        polygonOffset
-        polygonOffsetFactor={-1}
-        polygonOffsetUnits={-1}
-      />
-    </lineSegments>
+    <lineSegments geometry={geometry} material={material} renderOrder={1} />
   );
 }

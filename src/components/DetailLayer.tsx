@@ -1,11 +1,43 @@
 'use client';
 
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 
 const DEG2RAD = Math.PI / 180;
-const RADIUS = 1.0003; // Slightly above streets
+const RADIUS = 1.0; // Exact radius - depth bias handles z-fighting
+
+// Vertex shader for detail lines
+const DETAIL_VERTEX = /* glsl */ `
+  void main() {
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+// Fragment shader with depth bias to avoid z-fighting
+const DETAIL_FRAGMENT = /* glsl */ `
+  uniform vec3 uColor;
+  uniform float uOpacity;
+
+  void main() {
+    gl_FragColor = vec4(uColor, uOpacity);
+    gl_FragDepth = gl_FragCoord.z - 0.00001;
+  }
+`;
+
+// Create a shader material with depth bias
+function createDepthBiasMaterial(color: string, opacity: number): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    vertexShader: DETAIL_VERTEX,
+    fragmentShader: DETAIL_FRAGMENT,
+    uniforms: {
+      uColor: { value: new THREE.Color(color) },
+      uOpacity: { value: opacity },
+    },
+    transparent: true,
+    depthWrite: false,
+  });
+}
 
 // Natural Earth data URLs
 const DATA_URLS = {
@@ -191,68 +223,52 @@ export function DetailLayer() {
     }
   });
 
+  // Create materials with depth bias
+  const statesMaterial = useMemo(() => createDepthBiasMaterial('#a89880', 0.3), []);
+  const urbanMaterial = useMemo(() => createDepthBiasMaterial('#d4c4a8', 0.45), []);
+  const lakesMaterial = useMemo(() => createDepthBiasMaterial('#6a9fb5', 0.55), []);
+  const riversMaterial = useMemo(() => createDepthBiasMaterial('#7ab0c9', 0.45), []);
+  const roadsMaterial = useMemo(() => createDepthBiasMaterial('#c9a86a', 0.4), []);
+
+  // Update material opacities based on current fade state
+  useEffect(() => {
+    statesMaterial.uniforms.uOpacity.value = statesOpacity * 0.3;
+  }, [statesOpacity, statesMaterial]);
+
+  useEffect(() => {
+    urbanMaterial.uniforms.uOpacity.value = opacity * 0.45;
+    lakesMaterial.uniforms.uOpacity.value = opacity * 0.55;
+    riversMaterial.uniforms.uOpacity.value = opacity * 0.45;
+    roadsMaterial.uniforms.uOpacity.value = opacity * 0.4;
+  }, [opacity, urbanMaterial, lakesMaterial, riversMaterial, roadsMaterial]);
+
   if (opacity < 0.01 && statesOpacity < 0.01) return null;
 
   return (
     <group>
       {/* States/provinces - appears first when zooming in */}
       {geometries.states && statesOpacity > 0.01 && (
-        <lineSegments geometry={geometries.states}>
-          <lineBasicMaterial
-            color="#a89880"
-            transparent
-            opacity={statesOpacity * 0.3}
-            depthWrite={false}
-          />
-        </lineSegments>
+        <lineSegments geometry={geometries.states} material={statesMaterial} renderOrder={2} />
       )}
 
       {/* Urban areas - warm cream outline */}
       {geometries.urban && opacity > 0.01 && (
-        <lineSegments geometry={geometries.urban}>
-          <lineBasicMaterial
-            color="#d4c4a8"
-            transparent
-            opacity={opacity * 0.45}
-            depthWrite={false}
-          />
-        </lineSegments>
+        <lineSegments geometry={geometries.urban} material={urbanMaterial} renderOrder={2} />
       )}
 
       {/* Lakes - soft blue */}
       {geometries.lakes && opacity > 0.01 && (
-        <lineSegments geometry={geometries.lakes}>
-          <lineBasicMaterial
-            color="#6a9fb5"
-            transparent
-            opacity={opacity * 0.55}
-            depthWrite={false}
-          />
-        </lineSegments>
+        <lineSegments geometry={geometries.lakes} material={lakesMaterial} renderOrder={2} />
       )}
 
       {/* Rivers - soft blue */}
       {geometries.rivers && opacity > 0.01 && (
-        <lineSegments geometry={geometries.rivers}>
-          <lineBasicMaterial
-            color="#7ab0c9"
-            transparent
-            opacity={opacity * 0.45}
-            depthWrite={false}
-          />
-        </lineSegments>
+        <lineSegments geometry={geometries.rivers} material={riversMaterial} renderOrder={2} />
       )}
 
       {/* Roads - warm gold */}
       {geometries.roads && opacity > 0.01 && (
-        <lineSegments geometry={geometries.roads}>
-          <lineBasicMaterial
-            color="#c9a86a"
-            transparent
-            opacity={opacity * 0.4}
-            depthWrite={false}
-          />
-        </lineSegments>
+        <lineSegments geometry={geometries.roads} material={roadsMaterial} renderOrder={2} />
       )}
     </group>
   );

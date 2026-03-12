@@ -1,12 +1,30 @@
 'use client';
 
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 
 const DEG2RAD = Math.PI / 180;
 const RAD2DEG = 180 / Math.PI;
-const ROAD_RADIUS = 1.0002;
+const ROAD_RADIUS = 1.0; // Exact radius - depth bias handles z-fighting
+
+// Vertex shader for street lines
+const STREET_VERTEX = /* glsl */ `
+  void main() {
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+// Fragment shader with depth bias to avoid z-fighting
+const STREET_FRAGMENT = /* glsl */ `
+  uniform vec3 uColor;
+  uniform float uOpacity;
+
+  void main() {
+    gl_FragColor = vec4(uColor, uOpacity);
+    gl_FragDepth = gl_FragCoord.z - 0.00001;
+  }
+`;
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
 
@@ -302,16 +320,28 @@ export function StreetTiles() {
     }
   });
 
+  // Create material with depth bias
+  const material = useMemo(() => {
+    return new THREE.ShaderMaterial({
+      vertexShader: STREET_VERTEX,
+      fragmentShader: STREET_FRAGMENT,
+      uniforms: {
+        uColor: { value: new THREE.Color('#c9a86a') },
+        uOpacity: { value: 0.6 },
+      },
+      transparent: true,
+      depthWrite: false,
+    });
+  }, []);
+
+  // Update material opacity based on fade state
+  useEffect(() => {
+    material.uniforms.uOpacity.value = opacity * 0.6;
+  }, [opacity, material]);
+
   if (opacity < 0.01 || !geometry) return null;
 
   return (
-    <lineSegments geometry={geometry}>
-      <lineBasicMaterial
-        color="#c9a86a"
-        transparent
-        opacity={opacity * 0.6}
-        depthWrite={false}
-      />
-    </lineSegments>
+    <lineSegments geometry={geometry} material={material} renderOrder={3} />
   );
 }
