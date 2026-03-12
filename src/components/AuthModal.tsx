@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, FormEvent } from 'react';
+import { useState, useEffect, FormEvent } from 'react';
 import { signIn } from 'next-auth/react';
 import { useAppState } from '@/lib/store';
 
@@ -11,6 +11,19 @@ export function AuthModal() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // Escape key to close modal
+  useEffect(() => {
+    if (!showAuth) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setShowAuth(false);
+        setError('');
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showAuth, setShowAuth]);
 
   if (!showAuth) return null;
 

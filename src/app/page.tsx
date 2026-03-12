@@ -4,6 +4,7 @@ import { useEffect, useState, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import { useSession, signOut } from 'next-auth/react';
 import { useAppState } from '@/lib/store';
+import { useToast } from '@/components/Toast';
 import { AuthModal } from '@/components/AuthModal';
 import { BenchDetailPanel, AddBenchPanel } from '@/components/Panels';
 import { ForumPanel } from '@/components/Forum';
@@ -13,7 +14,8 @@ const GlobeScene = dynamic(() => import('@/components/GlobeScene'), { ssr: false
 
 export default function Home() {
   const { data: session } = useSession();
-  const { setBenches, setShowAuth, setAuthMode, setShowAddBench, setFlyTo, zoomLevel, setShouldResumeRotation, forumButtonPulse, setForumButtonPulse, showForum, setShowForum } = useAppState();
+  const { setBenches, setShowAuth, setAuthMode, showAddBench, setShowAddBench, setFlyTo, zoomLevel, setShouldResumeRotation, forumButtonPulse, setForumButtonPulse, showForum, setShowForum, selectedBench, setSelectedBench } = useAppState();
+  const { showToast } = useToast();
   const [titleVisible, setTitleVisible] = useState(true);
   const [shakeButton, setShakeButton] = useState<'forum' | 'addBench' | null>(null);
   const [showArrow, setShowArrow] = useState(false);
@@ -28,14 +30,37 @@ export default function Home() {
     }
   }, [forumButtonPulse, setForumButtonPulse]);
 
+  // Global Escape key handler to close panels
+  // Note: Forum and Auth handle their own Escape key internally
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        // Only handle panels that don't have their own escape handlers
+        // Forum handles escape internally (closes sub-panels first)
+        // Auth modal handles its own escape
+        if (!showForum && showAddBench) {
+          setShowAddBench(false);
+        } else if (!showForum && !showAddBench && selectedBench) {
+          setSelectedBench(null);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showForum, showAddBench, setShowAddBench, selectedBench, setSelectedBench]);
+
   useEffect(() => {
     fetch('/api/benches')
       .then((res) => res.json())
       .then((data) => {
         if (Array.isArray(data)) setBenches(data);
       })
-      .catch(() => {});
-  }, [setBenches]);
+      .catch((err) => {
+        console.error('Failed to fetch benches:', err);
+        showToast('Failed to load benches', 'error');
+      });
+  }, [setBenches, showToast]);
 
   // Hide title when zoomed in
   useEffect(() => {

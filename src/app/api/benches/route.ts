@@ -42,7 +42,8 @@ export async function GET(request: Request) {
     });
 
     return NextResponse.json(formatted);
-  } catch {
+  } catch (error) {
+    console.error('GET /api/benches error:', error);
     return NextResponse.json({ error: 'Failed to fetch benches' }, { status: 500 });
   }
 }
@@ -95,7 +96,8 @@ export async function POST(request: Request) {
       userName: bench.user.name,
       createdAt: bench.createdAt.toISOString(),
     }, { status: 201 });
-  } catch {
+  } catch (error) {
+    console.error('POST /api/benches error:', error);
     return NextResponse.json({ error: 'Failed to create bench' }, { status: 500 });
   }
 }

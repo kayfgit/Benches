@@ -42,6 +42,8 @@ export interface Issue {
   createdAt: string;
 }
 
+export type SortOption = 'newest' | 'oldest' | 'popular' | 'name';
+
 export interface AppState {
   selectedBench: Bench | null;
   setSelectedBench: (b: Bench | null) => void;
@@ -73,4 +75,13 @@ export interface AppState {
   setShowForum: (show: boolean) => void;
   globeReady: boolean;
   setGlobeReady: (v: boolean) => void;
+  // Search and filter
+  searchQuery: string;
+  setSearchQuery: (q: string) => void;
+  filterCountry: string;
+  setFilterCountry: (c: string) => void;
+  sortBy: SortOption;
+  setSortBy: (s: SortOption) => void;
+  countries: string[];
+  filteredBenches: Bench[];
 }

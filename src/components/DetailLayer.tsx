@@ -162,16 +162,20 @@ export function DetailLayer() {
     const targetStatesOpacity = dist < 2.1 ? Math.min(1, (2.1 - dist) / 0.3) : 0;
     setStatesOpacity(prev => {
       const diff = targetStatesOpacity - prev;
-      if (Math.abs(diff) < 0.005) return targetStatesOpacity;
-      return prev + diff * 0.12;
+      if (Math.abs(diff) < 0.01) return targetStatesOpacity;
+      // Fast fade-out (0.4), slower fade-in (0.15)
+      const speed = diff < 0 ? 0.4 : 0.15;
+      return prev + diff * speed;
     });
 
     // Detail layers (urban, lakes, rivers, roads) - start at 1.6, fully visible at 1.3
     const targetOpacity = dist < 1.6 ? Math.min(1, (1.6 - dist) / 0.3) : 0;
     setOpacity(prev => {
       const diff = targetOpacity - prev;
-      if (Math.abs(diff) < 0.005) return targetOpacity;
-      return prev + diff * 0.12;
+      if (Math.abs(diff) < 0.01) return targetOpacity;
+      // Fast fade-out (0.4), slower fade-in (0.15)
+      const speed = diff < 0 ? 0.4 : 0.15;
+      return prev + diff * speed;
     });
 
     // Update geometry when camera moves significantly (throttled, adaptive threshold)

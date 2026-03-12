@@ -1,11 +1,11 @@
 'use client';
 
-import { useRef, useCallback, useState, WheelEvent as ReactWheelEvent } from 'react';
+import { useRef, useCallback, useState, useMemo, WheelEvent as ReactWheelEvent } from 'react';
 import { useFrame, useThree, ThreeEvent } from '@react-three/fiber';
 import { Html } from '@react-three/drei';
 import * as THREE from 'three';
-import type { Bench } from '@/types';
 import { useAppState } from '@/lib/store';
+import type { Bench } from '@/types';
 
 // Forward wheel events to canvas for zooming
 function useWheelPassthrough() {
@@ -26,6 +26,11 @@ function useWheelPassthrough() {
 const DEG2RAD = Math.PI / 180;
 const GLOBE_RADIUS = 1;
 const MARKER_HEIGHT = 0.0004; // Minimal offset above other layers for precision
+
+// Visibility thresholds for "hidden" benches (non-top-5 per country)
+const HIDDEN_BENCH_FADE_START = 2.0; // Start fading in at this zoom level
+const HIDDEN_BENCH_FADE_END = 1.4;   // Fully visible at this zoom level
+const TOP_BENCHES_PER_COUNTRY = 5;
 
 export function latLonToVec3(lat: number, lon: number, radius: number): THREE.Vector3 {
   const phi = (90 - lat) * DEG2RAD;
@@ -75,14 +80,17 @@ function BenchIcon({ style }: { style?: React.CSSProperties }) {
 function SingleMarker({
   bench,
   isSelected,
+  isTopBench,
 }: {
   bench: Bench;
   isSelected: boolean;
+  isTopBench: boolean; // Top 5 per country - always visible
 }) {
   const groupRef = useRef<THREE.Group>(null);
   const { camera } = useThree();
   const { setSelectedBench, transitioningBenchId } = useAppState();
   const [visible, setVisible] = useState(true);
+  const [zoomOpacity, setZoomOpacity] = useState(1);
   const [hovered, setHovered] = useState(false);
   const handleWheel = useWheelPassthrough();
 
@@ -104,13 +112,39 @@ function SingleMarker({
     const dot = normal.dot(toCamera);
     setVisible(dot > 0.15);
 
-    // No scaling needed - pins stay fixed screen size
+    // Zoom-based opacity for non-top benches
+    if (!isTopBench) {
+      const dist = camera.position.length();
+      let targetOpacity = 0;
+
+      if (dist <= HIDDEN_BENCH_FADE_END) {
+        targetOpacity = 1; // Fully visible when zoomed in close
+      } else if (dist >= HIDDEN_BENCH_FADE_START) {
+        targetOpacity = 0; // Hidden when zoomed out
+      } else {
+        // Fade in as we zoom in
+        targetOpacity = 1 - (dist - HIDDEN_BENCH_FADE_END) / (HIDDEN_BENCH_FADE_START - HIDDEN_BENCH_FADE_END);
+      }
+
+      // Smooth transition
+      setZoomOpacity(prev => {
+        const diff = targetOpacity - prev;
+        if (Math.abs(diff) < 0.01) return targetOpacity;
+        // Fast fade-out, slower fade-in
+        const speed = diff < 0 ? 0.3 : 0.15;
+        return prev + diff * speed;
+      });
+    }
   });
 
   const baseSize = isSelected ? 26 : 22;
 
-  // Don't render if transitioning (the picked location marker shows the animation instead)
-  const showMarker = visible && !isTransitioning;
+  // Calculate final opacity
+  // Selected benches and top benches are always fully visible
+  const markerOpacity = (isTopBench || isSelected) ? 1 : zoomOpacity;
+
+  // Don't render if transitioning or if hidden bench has 0 opacity
+  const showMarker = visible && !isTransitioning && markerOpacity > 0.01;
 
   return (
     <group ref={groupRef}>
@@ -118,8 +152,8 @@ function SingleMarker({
         center
         zIndexRange={[0, 0]}
         style={{
-          opacity: showMarker ? 1 : 0,
-          transition: 'opacity 0.25s ease',
+          opacity: showMarker ? markerOpacity : 0,
+          transition: 'opacity 0.15s ease',
           pointerEvents: 'none', // Let wheel events pass through
         }}
       >
@@ -339,21 +373,47 @@ function GlobeClickHandler() {
 }
 
 export function BenchMarkers({
-  benches,
   pickingLocation,
 }: {
-  benches: Bench[];
   pickingLocation: boolean;
 }) {
-  const { selectedBench } = useAppState();
+  const { selectedBench, filteredBenches, benches } = useAppState();
+
+  // Calculate top 5 benches per country (based on all benches, not filtered)
+  // This ensures the "featured" benches stay consistent regardless of search filters
+  const topBenchIds = useMemo(() => {
+    const topIds = new Set<string>();
+
+    // Group benches by country (use first part before comma as country name)
+    const byCountry = new Map<string, Bench[]>();
+    for (const bench of benches) {
+      const country = bench.country?.split(',')[0]?.trim() || 'Unknown';
+      if (!byCountry.has(country)) {
+        byCountry.set(country, []);
+      }
+      byCountry.get(country)!.push(bench);
+    }
+
+    // For each country, get top 5 by vote count
+    for (const [, countryBenches] of byCountry) {
+      const sorted = [...countryBenches].sort((a, b) => (b.voteCount || 0) - (a.voteCount || 0));
+      const top5 = sorted.slice(0, TOP_BENCHES_PER_COUNTRY);
+      for (const bench of top5) {
+        topIds.add(bench.id);
+      }
+    }
+
+    return topIds;
+  }, [benches]);
 
   return (
     <group>
-      {benches.map((bench) => (
+      {filteredBenches.map((bench) => (
         <SingleMarker
           key={bench.id}
           bench={bench}
           isSelected={selectedBench?.id === bench.id}
+          isTopBench={topBenchIds.has(bench.id)}
         />
       ))}
       {pickingLocation && <GlobeClickHandler />}

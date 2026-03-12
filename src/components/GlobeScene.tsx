@@ -325,7 +325,7 @@ function AutoRotation({ controlsRef }: { controlsRef: React.RefObject<any> }) {
 }
 
 function SceneContent() {
-  const { benches, pickingLocation } = useAppState();
+  const { pickingLocation } = useAppState();
   const controlsRef = useRef<any>(null);
 
   return (
@@ -342,7 +342,7 @@ function SceneContent() {
         <CountryBorders />
         <DetailLayer />
         <StreetTiles />
-        <BenchMarkers benches={benches} pickingLocation={pickingLocation} />
+        <BenchMarkers pickingLocation={pickingLocation} />
       </group>
 
       <AutoRotation controlsRef={controlsRef} />

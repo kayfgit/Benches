@@ -10,3 +10,4 @@ prisma/dev.db-journal
 public/uploads/*
 !public/uploads/.gitkeep
 .claude/
+TODOS.md

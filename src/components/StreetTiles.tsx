@@ -242,7 +242,9 @@ export function StreetTiles() {
     setOpacity(prev => {
       const diff = targetOpacity - prev;
       if (Math.abs(diff) < 0.01) return targetOpacity;
-      return prev + diff * 0.1;
+      // Fast fade-out (0.4), slower fade-in (0.15)
+      const speed = diff < 0 ? 0.4 : 0.15;
+      return prev + diff * speed;
     });
 
     // Don't process if not visible or limit reached

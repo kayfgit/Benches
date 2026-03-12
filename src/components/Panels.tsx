@@ -3,15 +3,91 @@
 import { useState, FormEvent, useRef, useEffect } from 'react';
 import { useSession } from 'next-auth/react';
 import { useAppState } from '@/lib/store';
+import { useToast } from '@/components/Toast';
 import type { Bench } from '@/types';
+
+// Admin email - matches Forum.tsx
+const ADMIN_EMAIL = process.env.NEXT_PUBLIC_ADMIN_EMAIL || 'test@test.com';
+
+/* ─── Confirmation Modal ────────────────────── */
+
+function ConfirmModal({
+  title,
+  message,
+  confirmText,
+  onConfirm,
+  onCancel,
+  loading,
+}: {
+  title: string;
+  message: string;
+  confirmText: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+  loading?: boolean;
+}) {
+  // Escape key to cancel
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCancel();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onCancel]);
+
+  return (
+    <div className="fixed inset-0 z-[200] flex items-center justify-center">
+      {/* Backdrop */}
+      <div
+        className="absolute inset-0 bg-deep/80 backdrop-blur-sm animate-fade-in"
+        onClick={onCancel}
+      />
+      {/* Modal */}
+      <div className="relative glass-strong rounded-2xl p-6 w-full max-w-sm mx-4 animate-slide-up">
+        <h3 className="font-display text-xl font-semibold text-text-primary mb-2">
+          {title}
+        </h3>
+        <p className="text-text-secondary text-sm mb-6">
+          {message}
+        </p>
+        <div className="flex gap-3">
+          <button
+            onClick={onCancel}
+            disabled={loading}
+            className="flex-1 py-2.5 px-4 rounded-lg bg-surface border border-ridge/50 text-text-secondary text-sm font-medium hover:bg-elevated transition-colors disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={loading}
+            className="flex-1 py-2.5 px-4 rounded-lg bg-red-500/20 border border-red-500/30 text-red-400 text-sm font-medium hover:bg-red-500/30 transition-colors disabled:opacity-50 disabled:cursor-wait"
+          >
+            {loading ? 'Deleting...' : confirmText}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /* ─── Bench Detail Panel ────────────────────── */
 
 export function BenchDetailPanel() {
+  const { data: session } = useSession();
   const { selectedBench, setSelectedBench, setFlyTo, removeBench } = useAppState();
+  const { showToast } = useToast();
   const [deleting, setDeleting] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   if (!selectedBench) return null;
+
+  // Check if current user can delete this bench (owner or admin)
+  const userId = session?.user ? (session.user as Record<string, unknown>).id as string : null;
+  const userEmail = session?.user?.email;
+  const isOwner = userId === selectedBench.userId;
+  const isAdmin = userEmail === ADMIN_EMAIL;
+  const canDelete = isOwner || isAdmin;
 
   const coords = `${selectedBench.latitude.toFixed(4)}, ${selectedBench.longitude.toFixed(4)}`;
   const dateStr = new Date(selectedBench.createdAt).toLocaleDateString('en-US', {
@@ -28,9 +104,15 @@ export function BenchDetailPanel() {
       if (res.ok) {
         removeBench(selectedBench.id);
         setSelectedBench(null);
+        setShowDeleteConfirm(false);
+        showToast('Bench removed successfully', 'success');
+      } else {
+        const data = await res.json();
+        showToast(data.error || 'Failed to remove bench', 'error');
       }
-    } catch {
-      // Ignore errors
+    } catch (err) {
+      console.error('Delete bench error:', err);
+      showToast('Failed to remove bench', 'error');
     } finally {
       setDeleting(false);
     }
@@ -149,16 +231,29 @@ export function BenchDetailPanel() {
             </div>
           </div>
 
-          {/* Delete button for testing */}
-          <button
-            onClick={handleDelete}
-            disabled={deleting}
-            className="w-full mt-4 py-2 px-4 rounded-lg bg-red-500/20 border border-red-500/30 text-red-400 text-sm font-medium hover:bg-red-500/30 transition-colors disabled:opacity-50 disabled:cursor-wait"
-          >
-            {deleting ? 'Removing...' : 'Remove Bench'}
-          </button>
+          {/* Delete button - only for owner or admin */}
+          {canDelete && (
+            <button
+              onClick={() => setShowDeleteConfirm(true)}
+              className="w-full mt-4 py-2 px-4 rounded-lg bg-red-500/20 border border-red-500/30 text-red-400 text-sm font-medium hover:bg-red-500/30 transition-colors"
+            >
+              Remove Bench
+            </button>
+          )}
         </div>
       </div>
+
+      {/* Delete confirmation modal */}
+      {showDeleteConfirm && (
+        <ConfirmModal
+          title="Remove Bench?"
+          message={`Are you sure you want to remove "${selectedBench.name}"? This action cannot be undone.`}
+          confirmText="Remove"
+          onConfirm={handleDelete}
+          onCancel={() => setShowDeleteConfirm(false)}
+          loading={deleting}
+        />
+      )}
     </div>
   );
 }
@@ -178,6 +273,7 @@ export function AddBenchPanel() {
     setForumButtonPulse,
     setTransitioningBenchId,
   } = useAppState();
+  const { showToast } = useToast();
 
   const [benchName, setBenchName] = useState('');
   const [description, setDescription] = useState('');

@@ -1,12 +1,12 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSession } from 'next-auth/react';
 import { useAppState } from '@/lib/store';
 import type { Bench, Comment, Issue } from '@/types';
 
-// Admin email - will be updated after deployment
-const ADMIN_EMAIL = 'test@test.com';
+// Admin email - configurable via environment variable
+const ADMIN_EMAIL = process.env.NEXT_PUBLIC_ADMIN_EMAIL || 'test@test.com';
 
 type ForumTab = 'all' | 'benches' | 'issues';
 
@@ -909,17 +909,44 @@ function getTimeAgo(dateStr: string): string {
 /* ─── Main Forum Panel (Fullscreen with left sidebar) ─── */
 export function ForumPanel() {
   const { data: session } = useSession();
-  const { showForum, setShowForum, setFlyTo, benches, setBenches } = useAppState();
+  const {
+    showForum,
+    setShowForum,
+    setFlyTo,
+    benches,
+    setBenches,
+    filteredBenches,
+    searchQuery,
+    setSearchQuery,
+    filterCountry,
+    setFilterCountry,
+    sortBy,
+    setSortBy,
+    countries,
+  } = useAppState();
   const [activeTab, setActiveTab] = useState<ForumTab>('all');
   const [issues, setIssues] = useState<Issue[]>([]);
   const [loadingIssues, setLoadingIssues] = useState(false);
   const [showCreateIssue, setShowCreateIssue] = useState(false);
-  const [sortBy, setSortBy] = useState<'new' | 'top'>('new');
+  const [showCountryDropdown, setShowCountryDropdown] = useState(false);
   const [selectedBenchDetail, setSelectedBenchDetail] = useState<Bench | null>(null);
   const [selectedIssueDetail, setSelectedIssueDetail] = useState<Issue | null>(null);
+  const countryDropdownRef = useRef<HTMLDivElement>(null);
 
   // Check if current user is admin
   const isAdmin = session?.user?.email === ADMIN_EMAIL;
+
+  // Close country dropdown on click outside
+  useEffect(() => {
+    if (!showCountryDropdown) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (countryDropdownRef.current && !countryDropdownRef.current.contains(e.target as Node)) {
+        setShowCountryDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showCountryDropdown]);
 
   // Load issues when tab changes
   useEffect(() => {
@@ -973,13 +1000,8 @@ export function ForumPanel() {
 
   if (!showForum) return null;
 
-  // Sort benches
-  const sortedBenches = [...benches].sort((a, b) => {
-    if (sortBy === 'top') {
-      return (b.voteCount || 0) - (a.voteCount || 0);
-    }
-    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-  });
+  // Check if filters are active
+  const hasActiveFilters = searchQuery || filterCountry || sortBy !== 'newest';
 
   const tabs: { id: ForumTab; label: string; icon: React.ReactNode }[] = [
     {
@@ -1050,7 +1072,7 @@ export function ForumPanel() {
                 {tab.label}
                 {tab.id === 'benches' && (
                   <span className="ml-auto text-xs bg-surface/50 px-2 py-0.5 rounded-full">
-                    {benches.length}
+                    {hasActiveFilters ? `${filteredBenches.length}/${benches.length}` : benches.length}
                   </span>
                 )}
                 {tab.id === 'issues' && issues.length > 0 && (
@@ -1081,39 +1103,173 @@ export function ForumPanel() {
         {/* Main Content Area */}
         <div className="flex-1 bg-deep/40 backdrop-blur-lg overflow-hidden flex flex-col">
           {/* Header bar */}
-          <div className="flex-shrink-0 p-6 pb-4 flex items-center justify-between border-b border-ridge/20">
-            <div>
-              <h3 className="font-display text-2xl font-semibold text-text-primary">
-                {activeTab === 'all' && 'All Posts'}
-                {activeTab === 'benches' && 'Benches'}
-                {activeTab === 'issues' && 'Issues'}
-              </h3>
-              <p className="text-sm text-text-muted mt-1">
-                {activeTab === 'all' && 'Recent activity and popular benches'}
-                {activeTab === 'benches' && `${benches.length} benches discovered`}
-                {activeTab === 'issues' && 'Report problems with benches or bugs'}
-              </p>
+          <div className="flex-shrink-0 p-6 pb-4 border-b border-ridge/20">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="font-display text-2xl font-semibold text-text-primary">
+                  {activeTab === 'all' && 'All Posts'}
+                  {activeTab === 'benches' && 'Benches'}
+                  {activeTab === 'issues' && 'Issues'}
+                </h3>
+                <p className="text-sm text-text-muted mt-1">
+                  {activeTab === 'all' && 'Recent activity and popular benches'}
+                  {activeTab === 'benches' && (
+                    hasActiveFilters
+                      ? `${filteredBenches.length} of ${benches.length} benches`
+                      : `${benches.length} benches discovered`
+                  )}
+                  {activeTab === 'issues' && 'Report problems with benches or bugs'}
+                </p>
+              </div>
+
+              {/* Close button */}
+              <button
+                onClick={() => setShowForum(false)}
+                className="p-2 rounded-lg text-text-muted hover:text-text-secondary hover:bg-surface/30 transition-colors"
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <path d="M18 6L6 18M6 6l12 12" />
+                </svg>
+              </button>
             </div>
 
-            {/* Sort buttons */}
+            {/* Search and Filter - only for benches tab */}
             {(activeTab === 'all' || activeTab === 'benches') && (
-              <div className="flex gap-1 p-1 rounded-xl bg-surface/30">
-                <button
-                  onClick={() => setSortBy('new')}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                    sortBy === 'new' ? 'bg-gold/20 text-gold' : 'text-text-muted hover:text-text-secondary'
-                  }`}
-                >
-                  New
-                </button>
-                <button
-                  onClick={() => setSortBy('top')}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                    sortBy === 'top' ? 'bg-gold/20 text-gold' : 'text-text-muted hover:text-text-secondary'
-                  }`}
-                >
-                  Top
-                </button>
+              <div className="flex flex-wrap gap-3 items-center">
+                {/* Search input */}
+                <div className="relative flex-1 min-w-[200px]">
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted"
+                  >
+                    <circle cx="11" cy="11" r="8" />
+                    <path d="M21 21l-4.35-4.35" />
+                  </svg>
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search benches..."
+                    className="w-full pl-10 pr-8 py-2 rounded-xl bg-surface/50 border border-ridge/30 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-gold/50 transition-colors"
+                  />
+                  {searchQuery && (
+                    <button
+                      onClick={() => setSearchQuery('')}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-secondary"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                        <path d="M18 6L6 18M6 6l12 12" />
+                      </svg>
+                    </button>
+                  )}
+                </div>
+
+                {/* Country filter */}
+                <div className="relative" ref={countryDropdownRef}>
+                  <button
+                    onClick={() => setShowCountryDropdown(!showCountryDropdown)}
+                    className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors flex items-center gap-2 ${
+                      filterCountry
+                        ? 'bg-gold/20 text-gold border border-gold/30'
+                        : 'bg-surface/50 text-text-muted hover:text-text-secondary border border-ridge/30'
+                    }`}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <circle cx="12" cy="12" r="10" />
+                      <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+                    </svg>
+                    {filterCountry || 'All Countries'}
+                    <svg
+                      width="12"
+                      height="12"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      className={`transition-transform ${showCountryDropdown ? 'rotate-180' : ''}`}
+                    >
+                      <path d="M6 9l6 6 6-6" />
+                    </svg>
+                  </button>
+
+                  {showCountryDropdown && (
+                    <div className="absolute top-full left-0 mt-2 w-48 bg-surface/95 backdrop-blur-xl rounded-xl border border-ridge/30 shadow-xl z-50 max-h-[300px] overflow-y-auto">
+                      <button
+                        onClick={() => {
+                          setFilterCountry('');
+                          setShowCountryDropdown(false);
+                        }}
+                        className={`w-full px-4 py-2.5 text-sm text-left hover:bg-elevated/50 transition-colors ${
+                          !filterCountry ? 'text-gold' : 'text-text-secondary'
+                        }`}
+                      >
+                        All Countries
+                      </button>
+                      {countries.map((country) => (
+                        <button
+                          key={country}
+                          onClick={() => {
+                            setFilterCountry(country);
+                            setShowCountryDropdown(false);
+                          }}
+                          className={`w-full px-4 py-2.5 text-sm text-left hover:bg-elevated/50 transition-colors ${
+                            filterCountry === country ? 'text-gold' : 'text-text-secondary'
+                          }`}
+                        >
+                          {country}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Sort options */}
+                <div className="flex gap-1 p-1 rounded-xl bg-surface/30">
+                  <button
+                    onClick={() => setSortBy('newest')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                      sortBy === 'newest' ? 'bg-gold/20 text-gold' : 'text-text-muted hover:text-text-secondary'
+                    }`}
+                  >
+                    New
+                  </button>
+                  <button
+                    onClick={() => setSortBy('popular')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                      sortBy === 'popular' ? 'bg-gold/20 text-gold' : 'text-text-muted hover:text-text-secondary'
+                    }`}
+                  >
+                    Top
+                  </button>
+                  <button
+                    onClick={() => setSortBy('name')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                      sortBy === 'name' ? 'bg-gold/20 text-gold' : 'text-text-muted hover:text-text-secondary'
+                    }`}
+                  >
+                    A-Z
+                  </button>
+                </div>
+
+                {/* Clear filters */}
+                {hasActiveFilters && (
+                  <button
+                    onClick={() => {
+                      setSearchQuery('');
+                      setFilterCountry('');
+                      setSortBy('newest');
+                    }}
+                    className="text-xs text-gold hover:text-gold-light transition-colors"
+                  >
+                    Clear filters
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -1123,7 +1279,7 @@ export function ForumPanel() {
             {/* All / Benches Tab - Grid of square cards */}
             {(activeTab === 'all' || activeTab === 'benches') && (
               <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-                {sortedBenches.length === 0 ? (
+                {filteredBenches.length === 0 ? (
                   <div className="col-span-full text-center py-20 text-text-muted">
                     <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mx-auto mb-4 text-ridge">
                       <path d="M4 18h16M4 14h16M6 14V8a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v6M6 18v2M18 18v2" />
@@ -1131,7 +1287,7 @@ export function ForumPanel() {
                     <p>No benches yet. Be the first to add one!</p>
                   </div>
                 ) : (
-                  sortedBenches.map((bench) => (
+                  filteredBenches.map((bench) => (
                     <BenchCard
                       key={bench.id}
                       bench={bench}
