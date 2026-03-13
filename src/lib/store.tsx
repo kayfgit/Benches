@@ -21,6 +21,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [showForum, setShowForum] = useState(false);
   const [globeReady, setGlobeReady] = useState(false);
 
+  // Settings - performance mode reduces visual quality for better FPS
+  const [performanceMode, setPerformanceMode] = useState(true); // Default ON for compatibility
+
   // Search and filter state
   const [searchQuery, setSearchQuery] = useState('');
   const [filterCountry, setFilterCountry] = useState('');
@@ -109,6 +112,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         sortBy, setSortBy,
         countries,
         filteredBenches,
+        // Settings
+        performanceMode, setPerformanceMode,
       }}
     >
       {children}

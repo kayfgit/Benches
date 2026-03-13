@@ -3,6 +3,7 @@
 import { useEffect, useRef, useCallback, useMemo } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
+import { useAppState } from '@/lib/store';
 
 const DEG2RAD = Math.PI / 180;
 const RADIUS = 1.0; // Exact radius - depth bias handles z-fighting
@@ -50,8 +51,15 @@ function createDepthBiasMaterial(color: string, opacity: number): THREE.ShaderMa
   });
 }
 
-// Natural Earth data URLs
-const DATA_URLS = {
+// Natural Earth data URLs - 50m scale for performance mode, 10m for quality mode
+const DATA_URLS_PERFORMANCE = {
+  states: 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_1_states_provinces_lines.geojson',
+  lakes: 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_lakes.geojson',
+  rivers: 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_rivers_lake_centerlines.geojson',
+};
+
+// Quality mode uses 10m resolution (original high detail) with all layers
+const DATA_URLS_QUALITY = {
   states: 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_1_states_provinces_lines.geojson',
   urban: 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_urban_areas.geojson',
   lakes: 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_lakes.geojson',
@@ -92,6 +100,7 @@ interface LayerSegments {
 
 export function DetailLayer() {
   const { camera } = useThree();
+  const { performanceMode } = useAppState();
 
   // Use refs instead of state to avoid re-renders in useFrame
   const opacityRef = useRef(0);
@@ -108,20 +117,37 @@ export function DetailLayer() {
   const segmentsRef = useRef<LayerSegments>({});
   const lastUpdatePos = useRef(new THREE.Vector3(0, 0, 100));
   const dataLoaded = useRef(false);
+  const lastPerformanceMode = useRef(performanceMode);
 
-  // Load and process all data sources
+  // Load and process all data sources - respects performance mode
   useEffect(() => {
+    // Reload if performance mode changed
+    if (lastPerformanceMode.current !== performanceMode) {
+      lastPerformanceMode.current = performanceMode;
+      dataLoaded.current = false;
+      segmentsRef.current = {};
+    }
+
     const loadData = async () => {
       try {
-        const results = await Promise.all([
-          fetch(DATA_URLS.states).then(r => r.json()).catch(() => null),
-          fetch(DATA_URLS.urban).then(r => r.json()).catch(() => null),
-          fetch(DATA_URLS.lakes).then(r => r.json()).catch(() => null),
-          fetch(DATA_URLS.rivers).then(r => r.json()).catch(() => null),
-          fetch(DATA_URLS.roads).then(r => r.json()).catch(() => null),
-        ]);
+        const urls = performanceMode ? DATA_URLS_PERFORMANCE : DATA_URLS_QUALITY;
 
-        const [states, urban, lakes, rivers, roads] = results;
+        const fetches = [
+          fetch(urls.states).then(r => r.json()).catch(() => null),
+          fetch(urls.lakes).then(r => r.json()).catch(() => null),
+          fetch(urls.rivers).then(r => r.json()).catch(() => null),
+        ];
+
+        // Only fetch urban and roads in quality mode
+        if (!performanceMode) {
+          fetches.push(
+            fetch(urls.urban!).then(r => r.json()).catch(() => null),
+            fetch(urls.roads!).then(r => r.json()).catch(() => null),
+          );
+        }
+
+        const results = await Promise.all(fetches);
+        const [states, lakes, rivers, urban, roads] = results;
 
         // Extract segments from GeoJSON
         const extractSegments = (geoJson: any): RawSegment[] => {
@@ -163,10 +189,12 @@ export function DetailLayer() {
 
         segmentsRef.current = {
           states: extractSegments(states),
-          urban: extractSegments(urban),
           lakes: extractSegments(lakes),
           rivers: extractSegments(rivers),
-          roads: extractSegments(roads),
+          ...(performanceMode ? {} : {
+            urban: extractSegments(urban),
+            roads: extractSegments(roads),
+          }),
         };
 
         dataLoaded.current = true;
@@ -175,7 +203,7 @@ export function DetailLayer() {
       }
     };
     loadData();
-  }, []);
+  }, [performanceMode]);
 
   // Build visible geometry - only include segments facing the camera
   // Reuses geometry objects to avoid GC pressure
@@ -250,7 +278,7 @@ export function DetailLayer() {
     if (urbanMeshRef.current) {
       const mat = urbanMeshRef.current.material as THREE.ShaderMaterial;
       mat.uniforms.uOpacity.value = opacityRef.current * 0.45;
-      urbanMeshRef.current.visible = opacityRef.current > 0.01 && !!geometriesRef.current.urban;
+      urbanMeshRef.current.visible = !performanceMode && opacityRef.current > 0.01 && !!geometriesRef.current.urban;
     }
     if (lakesMeshRef.current) {
       const mat = lakesMeshRef.current.material as THREE.ShaderMaterial;
@@ -265,7 +293,7 @@ export function DetailLayer() {
     if (roadsMeshRef.current) {
       const mat = roadsMeshRef.current.material as THREE.ShaderMaterial;
       mat.uniforms.uOpacity.value = opacityRef.current * 0.4;
-      roadsMeshRef.current.visible = opacityRef.current > 0.01 && !!geometriesRef.current.roads;
+      roadsMeshRef.current.visible = !performanceMode && opacityRef.current > 0.01 && !!geometriesRef.current.roads;
     }
 
     // Update geometry when camera moves significantly (throttled, adaptive threshold)

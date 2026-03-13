@@ -14,13 +14,28 @@ const GlobeScene = dynamic(() => import('@/components/GlobeScene'), { ssr: false
 
 export default function Home() {
   const { data: session } = useSession();
-  const { setBenches, setShowAuth, setAuthMode, showAddBench, setShowAddBench, setFlyTo, zoomLevel, setShouldResumeRotation, forumButtonPulse, setForumButtonPulse, showForum, setShowForum, selectedBench, setSelectedBench } = useAppState();
+  const { setBenches, setShowAuth, setAuthMode, showAddBench, setShowAddBench, setFlyTo, zoomLevel, setShouldResumeRotation, forumButtonPulse, setForumButtonPulse, showForum, setShowForum, selectedBench, setSelectedBench, performanceMode, setPerformanceMode } = useAppState();
   const { showToast } = useToast();
   const [titleVisible, setTitleVisible] = useState(true);
   const [shakeButton, setShakeButton] = useState<'forum' | 'addBench' | null>(null);
   const [showArrow, setShowArrow] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const signInRef = useRef<HTMLButtonElement>(null);
   const forumButtonRef = useRef<HTMLButtonElement>(null);
+  const settingsRef = useRef<HTMLDivElement>(null);
+
+  // Close settings dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (settingsRef.current && !settingsRef.current.contains(e.target as Node)) {
+        setShowSettings(false);
+      }
+    };
+    if (showSettings) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showSettings]);
 
   // Reset forum button pulse after animation
   useEffect(() => {
@@ -204,8 +219,11 @@ export default function Home() {
 
         {/* Sign In / User */}
         {session ? (
-          <div className="flex items-center gap-3 ml-1">
-            <div className="glass rounded-full px-4 py-2.5 flex items-center gap-3">
+          <div className="flex items-center gap-3 ml-1 relative" ref={settingsRef}>
+            <button
+              onClick={() => setShowSettings(!showSettings)}
+              className="glass rounded-full px-4 py-2.5 flex items-center gap-3 hover:bg-elevated/60 transition-all outline-none focus:outline-none"
+            >
               <div className="w-7 h-7 rounded-full bg-gradient-to-br from-gold/30 to-gold-light/30 flex items-center justify-center">
                 <span className="text-xs font-semibold text-gold">
                   {session.user?.name?.charAt(0).toUpperCase()}
@@ -214,38 +232,147 @@ export default function Home() {
               <span className="text-sm text-text-secondary font-medium hidden sm:inline">
                 {session.user?.name}
               </span>
-              <button
-                onClick={() => signOut()}
-                className="text-text-muted hover:text-text-primary transition-colors text-sm ml-1 outline-none focus:outline-none"
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                className={`text-text-muted transition-transform ${showSettings ? 'rotate-180' : ''}`}
               >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-                  <polyline points="16 17 21 12 16 7" />
-                  <line x1="21" y1="12" x2="9" y2="12" />
-                </svg>
-              </button>
-            </div>
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </button>
+
+            {/* Settings Dropdown */}
+            {showSettings && (
+              <div className="absolute top-full right-0 mt-2 w-64 glass-strong rounded-xl shadow-xl border border-ridge/30 overflow-hidden animate-fade-in">
+                <div className="p-3 border-b border-ridge/20">
+                  <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wider">Settings</h3>
+                </div>
+
+                {/* Performance Mode Toggle */}
+                <div className="p-3">
+                  <label className="flex items-center justify-between cursor-pointer group">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-lg bg-surface/50 flex items-center justify-center">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-gold">
+                          <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                        </svg>
+                      </div>
+                      <div>
+                        <div className="text-sm font-medium text-text-primary">Performance Mode</div>
+                        <div className="text-xs text-text-muted">Reduce visual effects for better FPS</div>
+                      </div>
+                    </div>
+                    <div
+                      className={`relative w-11 h-6 rounded-full transition-colors ${
+                        performanceMode ? 'bg-gold' : 'bg-ridge/50'
+                      }`}
+                      onClick={() => setPerformanceMode(!performanceMode)}
+                    >
+                      <div
+                        className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform ${
+                          performanceMode ? 'translate-x-6' : 'translate-x-1'
+                        }`}
+                      />
+                    </div>
+                  </label>
+                </div>
+
+                {/* Sign Out */}
+                <div className="p-2 border-t border-ridge/20">
+                  <button
+                    onClick={() => {
+                      setShowSettings(false);
+                      signOut();
+                    }}
+                    className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-surface/50 transition-colors text-left"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-text-muted">
+                      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                      <polyline points="16 17 21 12 16 7" />
+                      <line x1="21" y1="12" x2="9" y2="12" />
+                    </svg>
+                    <span className="text-sm text-text-secondary">Sign Out</span>
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         ) : (
-          <button
-            ref={signInRef}
-            onClick={() => {
-              setAuthMode('login');
-              setShowAuth(true);
-            }}
-            className={`
-              btn-gold text-sm py-2.5 px-5 rounded-full shadow-lg
-              flex items-center gap-2 transition-all outline-none focus:outline-none
-              ${showArrow ? 'ring-2 ring-gold/50 ring-offset-2 ring-offset-deep scale-105' : ''}
-            `}
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
-              <polyline points="10 17 15 12 10 7" />
-              <line x1="15" y1="12" x2="3" y2="12" />
-            </svg>
-            <span>Sign In</span>
-          </button>
+          <div className="flex items-center gap-2 relative" ref={settingsRef}>
+            {/* Settings gear for non-logged-in users */}
+            <button
+              onClick={() => setShowSettings(!showSettings)}
+              className="glass rounded-full p-2.5 hover:bg-elevated/60 transition-all outline-none focus:outline-none"
+              title="Settings"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-text-secondary">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+              </svg>
+            </button>
+
+            {/* Settings Dropdown for non-logged-in users */}
+            {showSettings && (
+              <div className="absolute top-full right-0 mt-2 w-64 glass-strong rounded-xl shadow-xl border border-ridge/30 overflow-hidden animate-fade-in z-50">
+                <div className="p-3 border-b border-ridge/20">
+                  <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wider">Settings</h3>
+                </div>
+
+                {/* Performance Mode Toggle */}
+                <div className="p-3">
+                  <label className="flex items-center justify-between cursor-pointer group">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-lg bg-surface/50 flex items-center justify-center">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-gold">
+                          <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                        </svg>
+                      </div>
+                      <div>
+                        <div className="text-sm font-medium text-text-primary">Performance Mode</div>
+                        <div className="text-xs text-text-muted">Reduce visual effects for better FPS</div>
+                      </div>
+                    </div>
+                    <div
+                      className={`relative w-11 h-6 rounded-full transition-colors ${
+                        performanceMode ? 'bg-gold' : 'bg-ridge/50'
+                      }`}
+                      onClick={() => setPerformanceMode(!performanceMode)}
+                    >
+                      <div
+                        className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform ${
+                          performanceMode ? 'translate-x-6' : 'translate-x-1'
+                        }`}
+                      />
+                    </div>
+                  </label>
+                </div>
+              </div>
+            )}
+
+            <button
+              ref={signInRef}
+              onClick={() => {
+                setAuthMode('login');
+                setShowAuth(true);
+              }}
+              className={`
+                btn-gold text-sm py-2.5 px-5 rounded-full shadow-lg
+                flex items-center gap-2 transition-all outline-none focus:outline-none
+                ${showArrow ? 'ring-2 ring-gold/50 ring-offset-2 ring-offset-deep scale-105' : ''}
+              `}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
+                <polyline points="10 17 15 12 10 7" />
+                <line x1="15" y1="12" x2="3" y2="12" />
+              </svg>
+              <span>Sign In</span>
+            </button>
+          </div>
         )}
       </div>
 
@@ -306,6 +433,13 @@ export default function Home() {
         }
         .animate-forum-pulse {
           animation: forum-pulse 1s ease-out;
+        }
+        @keyframes fade-in {
+          from { opacity: 0; transform: translateY(-8px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in {
+          animation: fade-in 0.15s ease-out;
         }
       `}</style>
     </main>

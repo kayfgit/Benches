@@ -84,4 +84,7 @@ export interface AppState {
   setSortBy: (s: SortOption) => void;
   countries: string[];
   filteredBenches: Bench[];
+  // Settings
+  performanceMode: boolean;
+  setPerformanceMode: (v: boolean) => void;
 }

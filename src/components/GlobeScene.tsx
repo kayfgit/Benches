@@ -15,12 +15,15 @@ import { StreetTiles } from './StreetTiles';
 import { BenchMarkers } from './BenchMarkers';
 import { useAppState } from '@/lib/store';
 
+// Performance mode settings
+const DUST_COUNT_PERFORMANCE = 150;
+const DUST_COUNT_QUALITY = 400;
+
 /* Warm floating dust motes */
-function DustMotes() {
+function DustMotes({ count }: { count: number }) {
   const ref = useRef<THREE.Points>(null);
-  // Memoize positions to avoid recreating on every render
+  // Memoize positions - recreate when count changes (performance mode toggle)
   const positions = useMemo(() => {
-    const count = 400;
     const pos = new Float32Array(count * 3);
     for (let i = 0; i < count; i++) {
       const r = 3 + Math.random() * 12;
@@ -31,7 +34,7 @@ function DustMotes() {
       pos[i * 3 + 2] = r * Math.cos(phi);
     }
     return pos;
-  }, []);
+  }, [count]);
 
   useFrame((state) => {
     if (ref.current) {
@@ -567,7 +570,8 @@ function AutoRotation() {
 }
 
 function SceneContent() {
-  const { pickingLocation } = useAppState();
+  const { pickingLocation, performanceMode } = useAppState();
+  const dustCount = performanceMode ? DUST_COUNT_PERFORMANCE : DUST_COUNT_QUALITY;
 
   return (
     <>
@@ -576,7 +580,7 @@ function SceneContent() {
       <directionalLight position={[5, 4, 3]} intensity={0.6} color="#ffd9b3" />
       <directionalLight position={[-3, 2, -2]} intensity={0.15} color="#d4c4a8" />
 
-      <DustMotes />
+      <DustMotes count={dustCount} />
 
       <group>
         <Earth />
@@ -603,13 +607,21 @@ function LoadingFallback() {
 }
 
 export default function GlobeScene() {
-  const { pickingLocation } = useAppState();
+  const { pickingLocation, performanceMode } = useAppState();
+
+  // Performance mode: lower DPR, no antialiasing
+  // Quality mode: device DPR (up to 2), antialiasing enabled
+  const dpr: [number, number] = performanceMode ? [0.75, 1] : [1, 2];
+  const antialias = !performanceMode;
 
   return (
     <div className={`absolute inset-0 ${pickingLocation ? 'cursor-crosshair' : ''}`}>
+      {/* Key forces Canvas remount when performance mode changes (gl settings only apply on mount) */}
       <Canvas
+        key={performanceMode ? 'perf' : 'quality'}
         camera={{ position: [0, 0.3, 2.8], fov: 50, near: 0.001, far: 100 }}
-        gl={{ antialias: true, alpha: true, powerPreference: 'high-performance' }}
+        dpr={dpr}
+        gl={{ antialias, alpha: true, powerPreference: 'high-performance' }}
         style={{
           background: 'radial-gradient(ellipse at 50% 45%, #2e261e 0%, #1f1a13 40%, #17130e 80%)',
         }}

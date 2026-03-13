@@ -1,8 +1,8 @@
 'use client';
 
-import { useMemo, useRef } from 'react';
-import { useFrame } from '@react-three/fiber';
+import { useMemo } from 'react';
 import * as THREE from 'three';
+import { useAppState } from '@/lib/store';
 
 /*
   Flat matte globe - warm brown sphere with subtle limb darkening.
@@ -61,7 +61,17 @@ const ATMO_FRAGMENT = /* glsl */ `
 `;
 
 export function Earth() {
-  const geometry = useMemo(() => new THREE.SphereGeometry(1, 128, 64), []);
+  const { performanceMode } = useAppState();
+
+  // Performance mode: reduced segments; Quality mode: higher detail
+  const geometry = useMemo(
+    () => new THREE.SphereGeometry(1, performanceMode ? 64 : 128, performanceMode ? 32 : 64),
+    [performanceMode]
+  );
+  const atmoGeometry = useMemo(
+    () => new THREE.SphereGeometry(1, performanceMode ? 32 : 64, performanceMode ? 16 : 32),
+    [performanceMode]
+  );
 
   return (
     <>
@@ -73,8 +83,7 @@ export function Earth() {
       </mesh>
 
       {/* Subtle warm atmospheric halo */}
-      <mesh scale={1.12}>
-        <sphereGeometry args={[1, 64, 32]} />
+      <mesh scale={1.12} geometry={atmoGeometry}>
         <shaderMaterial
           vertexShader={ATMO_VERTEX}
           fragmentShader={ATMO_FRAGMENT}
