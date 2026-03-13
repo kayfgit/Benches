@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
+import { useRef, useCallback, useEffect, useMemo } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 
@@ -8,19 +8,30 @@ const DEG2RAD = Math.PI / 180;
 const RAD2DEG = 180 / Math.PI;
 const ROAD_RADIUS = 1.0; // Exact radius - depth bias handles z-fighting
 
-// Vertex shader for street lines
+// Vertex shader for street lines - passes world position for backface culling
 const STREET_VERTEX = /* glsl */ `
+  varying vec3 vWorldPos;
+
   void main() {
+    vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
   }
 `;
 
-// Fragment shader with depth bias to avoid z-fighting
+// Fragment shader with depth bias and backface culling
 const STREET_FRAGMENT = /* glsl */ `
+  varying vec3 vWorldPos;
   uniform vec3 uColor;
   uniform float uOpacity;
 
   void main() {
+    // Normal is normalized position (sphere centered at origin)
+    vec3 normal = normalize(vWorldPos);
+    vec3 viewDir = normalize(cameraPosition - vWorldPos);
+
+    // Discard back-facing fragments
+    if (dot(normal, viewDir) < 0.05) discard;
+
     gl_FragColor = vec4(uColor, uOpacity);
     gl_FragDepth = gl_FragCoord.z - 0.00001;
   }
@@ -88,10 +99,13 @@ interface RoadSegment {
 
 export function StreetTiles() {
   const { camera } = useThree();
-  const [opacity, setOpacity] = useState(0);
-  const [geometry, setGeometry] = useState<THREE.BufferGeometry | null>(null);
-  const [tileCount, setTileCount] = useState(0);
-  const [limitReached, setLimitReached] = useState(false);
+
+  // Use refs instead of state to avoid re-renders in useFrame
+  const opacityRef = useRef(0);
+  const geometryRef = useRef<THREE.BufferGeometry | null>(null);
+  const meshRef = useRef<THREE.LineSegments>(null);
+  const tileCountRef = useRef(0);
+  const limitReachedRef = useRef(false);
 
   const segments = useRef<Map<string, RoadSegment[]>>(new Map());
   const loadedTiles = useRef<Set<string>>(new Set());
@@ -102,6 +116,7 @@ export function StreetTiles() {
 
   // Debounce state
   const lastCameraPos = useRef(new THREE.Vector3());
+  const lastGeometryUpdatePos = useRef(new THREE.Vector3(0, 0, 100));
   const cameraStoppedAt = useRef<number | null>(null);
   const hasLoadedCurrentView = useRef(false);
   const lastLoadedArea = useRef<string>('');
@@ -119,7 +134,7 @@ export function StreetTiles() {
     });
   }, []);
 
-  // Rebuild geometry from current segments
+  // Rebuild geometry from current segments - reuses geometry to avoid GC
   const rebuildGeometry = useCallback(() => {
     const verts: number[] = [];
     const cx = camera.position.x, cy = camera.position.y, cz = camera.position.z;
@@ -135,17 +150,28 @@ export function StreetTiles() {
     });
 
     if (verts.length > 0) {
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-      setGeometry(geo);
-    } else {
-      setGeometry(null);
+      // Reuse existing geometry if possible, otherwise create new one
+      if (!geometryRef.current) {
+        geometryRef.current = new THREE.BufferGeometry();
+      }
+      // Update the position attribute in place
+      const posAttr = geometryRef.current.getAttribute('position') as THREE.BufferAttribute;
+      if (posAttr && posAttr.array.length >= verts.length) {
+        // Reuse existing buffer if large enough
+        (posAttr.array as Float32Array).set(verts);
+        posAttr.needsUpdate = true;
+        geometryRef.current.setDrawRange(0, verts.length / 3);
+      } else {
+        // Need a new buffer
+        geometryRef.current.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+      }
+      geometryRef.current.computeBoundingSphere();
     }
   }, [camera]);
 
   const loadTile = useCallback(async (x: number, y: number, zoom: number): Promise<boolean> => {
     if (!librariesLoaded.current || !MAPBOX_TOKEN) return false;
-    if (limitReached) return false;
+    if (limitReachedRef.current) return false;
 
     const key = `${zoom}/${x}/${y}`;
     if (loadedTiles.current.has(key) || loadingTiles.current.has(key)) return false;
@@ -153,9 +179,9 @@ export function StreetTiles() {
     loadingTiles.current.add(key);
 
     // Safety check
-    if (tileCount >= MAX_TILES_PER_SESSION) {
+    if (tileCountRef.current >= MAX_TILES_PER_SESSION) {
       console.warn(`Tile limit reached (${MAX_TILES_PER_SESSION}). Stopping to prevent charges.`);
-      setLimitReached(true);
+      limitReachedRef.current = true;
       loadingTiles.current.delete(key);
       return false;
     }
@@ -169,7 +195,7 @@ export function StreetTiles() {
         return false;
       }
 
-      setTileCount(prev => prev + 1);
+      tileCountRef.current += 1;
 
       const buffer = await response.arrayBuffer();
       const tile = new VectorTile.current(new Pbf.current(buffer));
@@ -204,7 +230,7 @@ export function StreetTiles() {
 
       if (newSegments.length > 0) {
         segments.current.set(key, newSegments);
-        console.log(`Tile ${key}: ${newSegments.length} roads (${tileCount + 1}/${MAX_TILES_PER_SESSION})`);
+        console.log(`Tile ${key}: ${newSegments.length} roads (${tileCountRef.current}/${MAX_TILES_PER_SESSION})`);
         return true;
       }
       return false;
@@ -212,7 +238,7 @@ export function StreetTiles() {
       loadingTiles.current.delete(key);
       return false;
     }
-  }, [tileCount, limitReached]);
+  }, []);
 
   // Load tiles for current view
   const loadVisibleTiles = useCallback(async (center: { lat: number; lng: number }, zoom: number) => {
@@ -252,21 +278,29 @@ export function StreetTiles() {
   useFrame(() => {
     const dist = camera.position.length();
 
-    // Opacity calculation
+    // Opacity calculation - update ref and material directly, no React state
     const targetOpacity = dist < VISIBILITY_START
       ? Math.min(1, (VISIBILITY_START - dist) / (VISIBILITY_START - VISIBILITY_FULL))
       : 0;
 
-    setOpacity(prev => {
-      const diff = targetOpacity - prev;
-      if (Math.abs(diff) < 0.01) return targetOpacity;
+    const diff = targetOpacity - opacityRef.current;
+    if (Math.abs(diff) >= 0.001) {
       // Fast fade-out (0.4), slower fade-in (0.15)
       const speed = diff < 0 ? 0.4 : 0.15;
-      return prev + diff * speed;
-    });
+      opacityRef.current += diff * speed;
+    } else {
+      opacityRef.current = targetOpacity;
+    }
+
+    // Update material opacity directly
+    if (meshRef.current) {
+      const mat = meshRef.current.material as THREE.ShaderMaterial;
+      mat.uniforms.uOpacity.value = opacityRef.current * 0.6;
+      meshRef.current.visible = opacityRef.current > 0.01 && geometryRef.current !== null;
+    }
 
     // Don't process if not visible or limit reached
-    if (dist > VISIBILITY_START || limitReached || !librariesLoaded.current) {
+    if (dist > VISIBILITY_START || limitReachedRef.current || !librariesLoaded.current) {
       // Reset debounce state when zoomed out
       cameraStoppedAt.current = null;
       hasLoadedCurrentView.current = false;
@@ -314,9 +348,13 @@ export function StreetTiles() {
       }
     }
 
-    // Rebuild geometry for face culling (only if we have data)
-    if (segments.current.size > 0 && opacity > 0.01) {
-      rebuildGeometry();
+    // Rebuild geometry ONLY when camera moves significantly (not every frame!)
+    if (segments.current.size > 0 && opacityRef.current > 0.01) {
+      const moved = camera.position.distanceTo(lastGeometryUpdatePos.current);
+      if (moved > 0.01) {
+        lastGeometryUpdatePos.current.copy(camera.position);
+        rebuildGeometry();
+      }
     }
   });
 
@@ -327,21 +365,29 @@ export function StreetTiles() {
       fragmentShader: STREET_FRAGMENT,
       uniforms: {
         uColor: { value: new THREE.Color('#c9a86a') },
-        uOpacity: { value: 0.6 },
+        uOpacity: { value: 0 },
       },
       transparent: true,
       depthWrite: false,
     });
   }, []);
 
-  // Update material opacity based on fade state
-  useEffect(() => {
-    material.uniforms.uOpacity.value = opacity * 0.6;
-  }, [opacity, material]);
+  // Create a placeholder geometry that will be updated
+  const placeholderGeometry = useMemo(() => {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute([], 3));
+    geometryRef.current = geo;
+    return geo;
+  }, []);
 
-  if (opacity < 0.01 || !geometry) return null;
-
+  // Always render but control visibility via ref - avoids mount/unmount overhead
   return (
-    <lineSegments geometry={geometry} material={material} renderOrder={3} />
+    <lineSegments
+      ref={meshRef}
+      geometry={placeholderGeometry}
+      material={material}
+      renderOrder={3}
+      visible={false}
+    />
   );
 }

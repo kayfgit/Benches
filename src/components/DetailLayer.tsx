@@ -1,25 +1,36 @@
 'use client';
 
-import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
+import { useEffect, useRef, useCallback, useMemo } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 
 const DEG2RAD = Math.PI / 180;
 const RADIUS = 1.0; // Exact radius - depth bias handles z-fighting
 
-// Vertex shader for detail lines
+// Vertex shader for detail lines - passes world position for backface culling
 const DETAIL_VERTEX = /* glsl */ `
+  varying vec3 vWorldPos;
+
   void main() {
+    vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
   }
 `;
 
-// Fragment shader with depth bias to avoid z-fighting
+// Fragment shader with depth bias and backface culling
 const DETAIL_FRAGMENT = /* glsl */ `
+  varying vec3 vWorldPos;
   uniform vec3 uColor;
   uniform float uOpacity;
 
   void main() {
+    // Normal is normalized position (sphere centered at origin)
+    vec3 normal = normalize(vWorldPos);
+    vec3 viewDir = normalize(cameraPosition - vWorldPos);
+
+    // Discard back-facing fragments
+    if (dot(normal, viewDir) < 0.05) discard;
+
     gl_FragColor = vec4(uColor, uOpacity);
     gl_FragDepth = gl_FragCoord.z - 0.00001;
   }
@@ -81,9 +92,18 @@ interface LayerSegments {
 
 export function DetailLayer() {
   const { camera } = useThree();
-  const [opacity, setOpacity] = useState(0);
-  const [statesOpacity, setStatesOpacity] = useState(0);
-  const [geometries, setGeometries] = useState<{ [key: string]: THREE.BufferGeometry }>({});
+
+  // Use refs instead of state to avoid re-renders in useFrame
+  const opacityRef = useRef(0);
+  const statesOpacityRef = useRef(0);
+  const geometriesRef = useRef<{ [key: string]: THREE.BufferGeometry }>({});
+
+  // Refs for mesh objects to update visibility/material directly
+  const statesMeshRef = useRef<THREE.LineSegments>(null);
+  const urbanMeshRef = useRef<THREE.LineSegments>(null);
+  const lakesMeshRef = useRef<THREE.LineSegments>(null);
+  const riversMeshRef = useRef<THREE.LineSegments>(null);
+  const roadsMeshRef = useRef<THREE.LineSegments>(null);
 
   const segmentsRef = useRef<LayerSegments>({});
   const lastUpdatePos = useRef(new THREE.Vector3(0, 0, 100));
@@ -158,9 +178,8 @@ export function DetailLayer() {
   }, []);
 
   // Build visible geometry - only include segments facing the camera
+  // Reuses geometry objects to avoid GC pressure
   const updateGeometry = useCallback((cx: number, cy: number, cz: number) => {
-    const newGeometries: { [key: string]: THREE.BufferGeometry } = {};
-
     for (const [key, segments] of Object.entries(segmentsRef.current)) {
       const verts: number[] = [];
 
@@ -178,13 +197,25 @@ export function DetailLayer() {
       }
 
       if (verts.length > 0) {
-        const geo = new THREE.BufferGeometry();
-        geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-        newGeometries[key] = geo;
+        // Reuse existing geometry or create new one
+        let geo = geometriesRef.current[key];
+        if (!geo) {
+          geo = new THREE.BufferGeometry();
+          geometriesRef.current[key] = geo;
+        }
+
+        // Update position attribute in place when possible
+        const posAttr = geo.getAttribute('position') as THREE.BufferAttribute;
+        if (posAttr && posAttr.array.length >= verts.length) {
+          (posAttr.array as Float32Array).set(verts);
+          posAttr.needsUpdate = true;
+          geo.setDrawRange(0, verts.length / 3);
+        } else {
+          geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+        }
+        geo.computeBoundingSphere();
       }
     }
-
-    setGeometries(newGeometries);
   }, []);
 
   useFrame(() => {
@@ -192,26 +223,53 @@ export function DetailLayer() {
 
     // States layer - start at 2.1, fully visible at 1.8
     const targetStatesOpacity = dist < 2.1 ? Math.min(1, (2.1 - dist) / 0.3) : 0;
-    setStatesOpacity(prev => {
-      const diff = targetStatesOpacity - prev;
-      if (Math.abs(diff) < 0.01) return targetStatesOpacity;
-      // Fast fade-out (0.4), slower fade-in (0.15)
-      const speed = diff < 0 ? 0.4 : 0.15;
-      return prev + diff * speed;
-    });
+    const statesDiff = targetStatesOpacity - statesOpacityRef.current;
+    if (Math.abs(statesDiff) >= 0.001) {
+      const speed = statesDiff < 0 ? 0.4 : 0.15;
+      statesOpacityRef.current += statesDiff * speed;
+    } else {
+      statesOpacityRef.current = targetStatesOpacity;
+    }
 
     // Detail layers (urban, lakes, rivers, roads) - start at 1.6, fully visible at 1.3
     const targetOpacity = dist < 1.6 ? Math.min(1, (1.6 - dist) / 0.3) : 0;
-    setOpacity(prev => {
-      const diff = targetOpacity - prev;
-      if (Math.abs(diff) < 0.01) return targetOpacity;
-      // Fast fade-out (0.4), slower fade-in (0.15)
+    const diff = targetOpacity - opacityRef.current;
+    if (Math.abs(diff) >= 0.001) {
       const speed = diff < 0 ? 0.4 : 0.15;
-      return prev + diff * speed;
-    });
+      opacityRef.current += diff * speed;
+    } else {
+      opacityRef.current = targetOpacity;
+    }
+
+    // Update material uniforms directly (no React re-render)
+    if (statesMeshRef.current) {
+      const mat = statesMeshRef.current.material as THREE.ShaderMaterial;
+      mat.uniforms.uOpacity.value = statesOpacityRef.current * 0.3;
+      statesMeshRef.current.visible = statesOpacityRef.current > 0.01 && !!geometriesRef.current.states;
+    }
+    if (urbanMeshRef.current) {
+      const mat = urbanMeshRef.current.material as THREE.ShaderMaterial;
+      mat.uniforms.uOpacity.value = opacityRef.current * 0.45;
+      urbanMeshRef.current.visible = opacityRef.current > 0.01 && !!geometriesRef.current.urban;
+    }
+    if (lakesMeshRef.current) {
+      const mat = lakesMeshRef.current.material as THREE.ShaderMaterial;
+      mat.uniforms.uOpacity.value = opacityRef.current * 0.55;
+      lakesMeshRef.current.visible = opacityRef.current > 0.01 && !!geometriesRef.current.lakes;
+    }
+    if (riversMeshRef.current) {
+      const mat = riversMeshRef.current.material as THREE.ShaderMaterial;
+      mat.uniforms.uOpacity.value = opacityRef.current * 0.45;
+      riversMeshRef.current.visible = opacityRef.current > 0.01 && !!geometriesRef.current.rivers;
+    }
+    if (roadsMeshRef.current) {
+      const mat = roadsMeshRef.current.material as THREE.ShaderMaterial;
+      mat.uniforms.uOpacity.value = opacityRef.current * 0.4;
+      roadsMeshRef.current.visible = opacityRef.current > 0.01 && !!geometriesRef.current.roads;
+    }
 
     // Update geometry when camera moves significantly (throttled, adaptive threshold)
-    const anyVisible = opacity > 0.01 || statesOpacity > 0.01;
+    const anyVisible = opacityRef.current > 0.01 || statesOpacityRef.current > 0.01;
     if (dataLoaded.current && anyVisible) {
       const moved = camera.position.distanceTo(lastUpdatePos.current);
       // Smaller threshold when zoomed in close
@@ -224,52 +282,62 @@ export function DetailLayer() {
   });
 
   // Create materials with depth bias
-  const statesMaterial = useMemo(() => createDepthBiasMaterial('#a89880', 0.3), []);
-  const urbanMaterial = useMemo(() => createDepthBiasMaterial('#d4c4a8', 0.45), []);
-  const lakesMaterial = useMemo(() => createDepthBiasMaterial('#6a9fb5', 0.55), []);
-  const riversMaterial = useMemo(() => createDepthBiasMaterial('#7ab0c9', 0.45), []);
-  const roadsMaterial = useMemo(() => createDepthBiasMaterial('#c9a86a', 0.4), []);
+  const statesMaterial = useMemo(() => createDepthBiasMaterial('#a89880', 0), []);
+  const urbanMaterial = useMemo(() => createDepthBiasMaterial('#d4c4a8', 0), []);
+  const lakesMaterial = useMemo(() => createDepthBiasMaterial('#6a9fb5', 0), []);
+  const riversMaterial = useMemo(() => createDepthBiasMaterial('#7ab0c9', 0), []);
+  const roadsMaterial = useMemo(() => createDepthBiasMaterial('#c9a86a', 0), []);
 
-  // Update material opacities based on current fade state
-  useEffect(() => {
-    statesMaterial.uniforms.uOpacity.value = statesOpacity * 0.3;
-  }, [statesOpacity, statesMaterial]);
+  // Create placeholder geometries for each layer
+  const placeholderGeometries = useMemo(() => {
+    const geos: { [key: string]: THREE.BufferGeometry } = {};
+    for (const key of ['states', 'urban', 'lakes', 'rivers', 'roads']) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute([], 3));
+      geos[key] = geo;
+      geometriesRef.current[key] = geo;
+    }
+    return geos;
+  }, []);
 
-  useEffect(() => {
-    urbanMaterial.uniforms.uOpacity.value = opacity * 0.45;
-    lakesMaterial.uniforms.uOpacity.value = opacity * 0.55;
-    riversMaterial.uniforms.uOpacity.value = opacity * 0.45;
-    roadsMaterial.uniforms.uOpacity.value = opacity * 0.4;
-  }, [opacity, urbanMaterial, lakesMaterial, riversMaterial, roadsMaterial]);
-
-  if (opacity < 0.01 && statesOpacity < 0.01) return null;
-
+  // Always render but control visibility via refs - avoids mount/unmount overhead
   return (
     <group>
-      {/* States/provinces - appears first when zooming in */}
-      {geometries.states && statesOpacity > 0.01 && (
-        <lineSegments geometry={geometries.states} material={statesMaterial} renderOrder={2} />
-      )}
-
-      {/* Urban areas - warm cream outline */}
-      {geometries.urban && opacity > 0.01 && (
-        <lineSegments geometry={geometries.urban} material={urbanMaterial} renderOrder={2} />
-      )}
-
-      {/* Lakes - soft blue */}
-      {geometries.lakes && opacity > 0.01 && (
-        <lineSegments geometry={geometries.lakes} material={lakesMaterial} renderOrder={2} />
-      )}
-
-      {/* Rivers - soft blue */}
-      {geometries.rivers && opacity > 0.01 && (
-        <lineSegments geometry={geometries.rivers} material={riversMaterial} renderOrder={2} />
-      )}
-
-      {/* Roads - warm gold */}
-      {geometries.roads && opacity > 0.01 && (
-        <lineSegments geometry={geometries.roads} material={roadsMaterial} renderOrder={2} />
-      )}
+      <lineSegments
+        ref={statesMeshRef}
+        geometry={placeholderGeometries.states}
+        material={statesMaterial}
+        renderOrder={2}
+        visible={false}
+      />
+      <lineSegments
+        ref={urbanMeshRef}
+        geometry={placeholderGeometries.urban}
+        material={urbanMaterial}
+        renderOrder={2}
+        visible={false}
+      />
+      <lineSegments
+        ref={lakesMeshRef}
+        geometry={placeholderGeometries.lakes}
+        material={lakesMaterial}
+        renderOrder={2}
+        visible={false}
+      />
+      <lineSegments
+        ref={riversMeshRef}
+        geometry={placeholderGeometries.rivers}
+        material={riversMaterial}
+        renderOrder={2}
+        visible={false}
+      />
+      <lineSegments
+        ref={roadsMeshRef}
+        geometry={placeholderGeometries.roads}
+        material={roadsMaterial}
+        renderOrder={2}
+        visible={false}
+      />
     </group>
   );
 }

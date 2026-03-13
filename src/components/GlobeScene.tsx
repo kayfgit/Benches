@@ -1,9 +1,13 @@
 'use client';
 
-import { Suspense, useRef, useEffect } from 'react';
+import { Suspense, useRef, useEffect, useMemo } from 'react';
 import { Canvas, useThree, useFrame } from '@react-three/fiber';
-import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
+
+// Reusable temp vectors to avoid allocations in useFrame loops
+const _tempVec3_1 = new THREE.Vector3();
+const _tempVec3_2 = new THREE.Vector3();
+const _tempQuat = new THREE.Quaternion();
 import { Earth } from './Earth';
 import { CountryBorders } from './CountryBorders';
 import { DetailLayer } from './DetailLayer';
@@ -14,7 +18,8 @@ import { useAppState } from '@/lib/store';
 /* Warm floating dust motes */
 function DustMotes() {
   const ref = useRef<THREE.Points>(null);
-  const positions = (() => {
+  // Memoize positions to avoid recreating on every render
+  const positions = useMemo(() => {
     const count = 400;
     const pos = new Float32Array(count * 3);
     for (let i = 0; i < count; i++) {
@@ -26,7 +31,7 @@ function DustMotes() {
       pos[i * 3 + 2] = r * Math.cos(phi);
     }
     return pos;
-  })();
+  }, []);
 
   useFrame((state) => {
     if (ref.current) {
@@ -52,65 +57,287 @@ function DustMotes() {
   );
 }
 
-/* Custom zoom controller with cursor-targeting, smoothing, and Ctrl/Shift modifiers */
-function ZoomController({ controlsRef }: { controlsRef: React.RefObject<any> }) {
+/*
+ * Custom globe controller with:
+ * - "Grab and drag" - point under cursor stays under cursor (like Google Maps)
+ * - Zoom to cursor position
+ * - Momentum/inertia on both drag and zoom
+ * - Smooth animations
+ */
+function GlobeController() {
   const { camera, gl } = useThree();
-  const zoomSpeedMod = useRef(1);
 
-  // Smooth zoom state
-  const targetCameraPos = useRef(new THREE.Vector3());
-  const isAnimating = useRef(false);
+  // Refs for state
   const raycaster = useRef(new THREE.Raycaster());
   const globeSphere = useRef(new THREE.Sphere(new THREE.Vector3(0, 0, 0), 1));
 
-  // Initialize target position
+  // Drag state
+  const isDragging = useRef(false);
+  const grabPoint = useRef(new THREE.Vector3()); // Point on globe where user grabbed
+  const lastMouse = useRef({ x: 0, y: 0 });
+
+  // Momentum state
+  const velocity = useRef(new THREE.Vector3()); // Angular velocity for drag momentum
+  const lastDragTime = useRef(0);
+  const dragDelta = useRef(new THREE.Quaternion());
+
+  // Zoom state
+  const targetDistance = useRef(camera.position.length());
+  const zoomSpeedMod = useRef(1);
+
+  // Constants
+  const DRAG_DAMPING = 0.92; // How quickly drag momentum decays (higher = more momentum)
+  const ZOOM_SMOOTHING = 0.12; // How smoothly camera approaches target distance
+  const MIN_VELOCITY = 0.0001; // Stop momentum below this threshold
+  const MAX_POLAR_ANGLE = 0.5; // How close to poles camera can get (in radians from pole, ~28 degrees)
+
+  // ===========================================
+  // ZOOM LIMITS - Adjust these values as needed
+  // ===========================================
+  const MIN_CAMERA_DIST = 1.0006; // How close to surface (1.0 = inside globe, 1.001 = very close)
+  const MAX_CAMERA_DIST = 50;     // How far out
+  const ZOOM_SPEED = 0.05;        // How fast scroll wheel zooms (lower = slower)
+
+  // Target direction for zoom-to-cursor (initialized in useEffect)
+  const targetDirection = useRef(new THREE.Vector3(0, 0, 1));
+
+  // Initialize target direction from actual camera position
   useEffect(() => {
-    targetCameraPos.current.copy(camera.position);
+    targetDirection.current.copy(camera.position).normalize();
+    targetDistance.current = camera.position.length();
   }, [camera]);
 
-  // Stop animation when user starts dragging
-  useEffect(() => {
-    const controls = controlsRef.current;
-    if (!controls) return;
-
-    const handleStart = () => {
-      // User started dragging - stop zoom animation immediately
-      isAnimating.current = false;
-      targetCameraPos.current.copy(camera.position);
+  // Get normalized mouse coordinates
+  const getMouseCoords = (e: MouseEvent | Touch) => {
+    const rect = gl.domElement.getBoundingClientRect();
+    return {
+      x: ((e.clientX - rect.left) / rect.width) * 2 - 1,
+      y: -((e.clientY - rect.top) / rect.height) * 2 + 1,
     };
+  };
 
-    controls.addEventListener('start', handleStart);
-    return () => controls.removeEventListener('start', handleStart);
-  }, [controlsRef, camera]);
+  // Clamp camera position to prevent going over poles (like Google Maps)
+  const clampToPolarLimit = () => {
+    const pos = camera.position;
+    const dist = pos.length();
+    const horizontalDist = Math.sqrt(pos.x * pos.x + pos.z * pos.z);
 
-  // Smooth animation + adaptive rotation speed
-  useFrame(() => {
-    const controls = controlsRef.current;
-    if (!controls) return;
+    // Calculate current polar angle (angle from equator plane)
+    const polarAngle = Math.atan2(Math.abs(pos.y), horizontalDist);
+    const maxAngle = Math.PI / 2 - MAX_POLAR_ANGLE; // Max angle from equator
 
-    // Keep controls target at origin always (globe center)
-    controls.target.set(0, 0, 0);
+    if (polarAngle > maxAngle) {
+      // Clamp to max angle while preserving horizontal direction and distance
+      const sign = pos.y > 0 ? 1 : -1;
+      const newY = Math.sin(maxAngle) * dist * sign;
+      const newHorizontalDist = Math.cos(maxAngle) * dist;
 
-    // Animate camera position smoothly
-    if (isAnimating.current) {
-      camera.position.lerp(targetCameraPos.current, 0.15);
-
-      // Stop animating when close enough
-      if (camera.position.distanceTo(targetCameraPos.current) < 0.0001) {
-        camera.position.copy(targetCameraPos.current);
-        isAnimating.current = false;
+      // Scale horizontal components to maintain direction
+      if (horizontalDist > 0.001) {
+        const scale = newHorizontalDist / horizontalDist;
+        pos.x *= scale;
+        pos.z *= scale;
+      } else {
+        // Camera is very close to pole - use last known horizontal direction or default
+        const lastHorizDist = Math.sqrt(lastMouse.current.x * lastMouse.current.x + lastMouse.current.y * lastMouse.current.y);
+        if (lastHorizDist > 0.01) {
+          // Push away in opposite direction of last mouse movement
+          pos.x = newHorizontalDist * (lastMouse.current.x > 0 ? -1 : 1);
+          pos.z = newHorizontalDist * 0.5;
+        } else {
+          pos.x = newHorizontalDist;
+          pos.z = 0;
+        }
       }
-      controls.update();
+      pos.y = newY;
+
+      // Aggressively clear velocity to prevent oscillation/flickering
+      velocity.current.set(0, 0, 0);
+    }
+  };
+
+  // Raycast to find point on globe under cursor
+  const getGlobeIntersection = (mouseX: number, mouseY: number): THREE.Vector3 | null => {
+    raycaster.current.setFromCamera(new THREE.Vector2(mouseX, mouseY), camera);
+    const intersectPoint = new THREE.Vector3();
+    const hit = raycaster.current.ray.intersectSphere(globeSphere.current, intersectPoint);
+    return hit ? intersectPoint : null;
+  };
+
+  // Rotate camera so that grabPoint appears at cursor position
+  const rotateCameraToPoint = (targetPoint: THREE.Vector3) => {
+    const grabDir = grabPoint.current.clone().normalize();
+    const targetDir = targetPoint.clone().normalize();
+
+    // Calculate how close we are to the poles (0 = equator, 1 = pole)
+    const cameraDir = camera.position.clone().normalize();
+    const polarProximity = Math.abs(cameraDir.y);
+
+    // Dampen rotation when near poles to prevent wild spinning
+    // As we get closer to poles, we interpolate less toward the target
+    const poleDamping = Math.max(0.1, 1 - polarProximity * polarProximity * 1.5);
+
+    // Find rotation from grabDir to targetDir
+    const quaternion = new THREE.Quaternion();
+    quaternion.setFromUnitVectors(targetDir, grabDir);
+
+    // Apply dampened rotation - slerp from identity toward full rotation
+    const identity = new THREE.Quaternion();
+    quaternion.slerp(identity, 1 - poleDamping);
+
+    // Apply rotation to camera position
+    camera.position.applyQuaternion(quaternion);
+
+    // Clamp to polar limits
+    clampToPolarLimit();
+
+    camera.lookAt(0, 0, 0);
+
+    // Store rotation for momentum (also dampened)
+    dragDelta.current.copy(quaternion);
+  };
+
+  // Animation loop - ALL camera updates happen here
+  // Uses module-level temp vectors to avoid allocations
+  useFrame(() => {
+    const currentDist = camera.position.length();
+    _tempVec3_1.copy(camera.position).normalize(); // currentDir
+
+    // Clamp target distance (single source of truth)
+    targetDistance.current = Math.max(MIN_CAMERA_DIST, Math.min(MAX_CAMERA_DIST, targetDistance.current));
+
+    // When dragging, always sync targetDirection to prevent rubber banding
+    if (isDragging.current) {
+      targetDirection.current.copy(_tempVec3_1);
     }
 
-    // Adaptive rotation speed based on zoom level
-    const dist = camera.position.length();
-    const rotateSpeed = Math.min(0.8, Math.max(0.02, (dist - 1) * 0.25));
-    controls.rotateSpeed = rotateSpeed;
+    // Apply drag momentum when not dragging
+    if (!isDragging.current && velocity.current.lengthSq() > MIN_VELOCITY * MIN_VELOCITY) {
+      _tempVec3_2.copy(velocity.current).normalize(); // axis
+      const angle = velocity.current.length();
+      _tempQuat.setFromAxisAngle(_tempVec3_2, angle);
+
+      camera.position.applyQuaternion(_tempQuat);
+      targetDirection.current.copy(camera.position).normalize(); // Keep in sync
+      clampToPolarLimit();
+      velocity.current.multiplyScalar(DRAG_DAMPING);
+    }
+
+    // Smoothly interpolate distance
+    const distDiff = targetDistance.current - currentDist;
+    if (Math.abs(distDiff) > 0.00001) {
+      const newDist = Math.max(MIN_CAMERA_DIST, currentDist + distDiff * ZOOM_SMOOTHING);
+      camera.position.normalize().multiplyScalar(newDist);
+    }
+
+    // Smoothly interpolate direction (for zoom-to-cursor) - only when not dragging
+    if (!isDragging.current) {
+      const dirDot = _tempVec3_1.dot(targetDirection.current);
+      if (dirDot < 0.9999 && dirDot > 0.99) { // Only interpolate if close enough (prevents jumps)
+        _tempVec3_2.copy(_tempVec3_1).lerp(targetDirection.current, ZOOM_SMOOTHING).normalize();
+        const dist = camera.position.length();
+        camera.position.copy(_tempVec3_2.multiplyScalar(dist));
+      }
+    }
+
+    // Always look at origin and enforce limits
+    camera.lookAt(0, 0, 0);
+
+    // Hard clamp - absolutely prevent going inside
+    if (camera.position.length() < MIN_CAMERA_DIST) {
+      camera.position.normalize().multiplyScalar(MIN_CAMERA_DIST);
+      targetDistance.current = MIN_CAMERA_DIST;
+    }
   });
 
+  // Event handlers
   useEffect(() => {
     const canvas = gl.domElement;
+
+    const handleMouseDown = (e: MouseEvent) => {
+      if (e.button !== 0 && e.button !== 2) return; // Left or right click only
+
+      const coords = getMouseCoords(e);
+      const intersection = getGlobeIntersection(coords.x, coords.y);
+
+      if (intersection) {
+        isDragging.current = true;
+        grabPoint.current.copy(intersection);
+        velocity.current.set(0, 0, 0); // Stop momentum
+        lastMouse.current = coords;
+        lastDragTime.current = performance.now();
+        canvas.style.cursor = 'grabbing';
+      }
+    };
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isDragging.current) return;
+
+      const coords = getMouseCoords(e);
+      const intersection = getGlobeIntersection(coords.x, coords.y);
+
+      if (intersection) {
+        // Calculate velocity for momentum
+        const now = performance.now();
+        const dt = Math.max(1, now - lastDragTime.current);
+
+        // Store camera position before rotation
+        const prevPos = camera.position.clone();
+
+        rotateCameraToPoint(intersection);
+
+        // Calculate angular velocity from position change
+        const posChange = camera.position.clone().sub(prevPos);
+        const axis = new THREE.Vector3().crossVectors(prevPos.normalize(), camera.position.clone().normalize());
+        const angle = prevPos.normalize().angleTo(camera.position.clone().normalize());
+
+        if (axis.lengthSq() > 0.00001 && dt > 0) {
+          axis.normalize();
+          // Weighted average with previous velocity for smoother momentum
+          const newVel = axis.multiplyScalar(angle * (16 / dt)); // Normalize to ~60fps
+          velocity.current.lerp(newVel, 0.3);
+        }
+
+        lastMouse.current = coords;
+        lastDragTime.current = now;
+      }
+    };
+
+    const handleMouseUp = () => {
+      if (isDragging.current) {
+        isDragging.current = false;
+        canvas.style.cursor = '';
+
+        // If drag was very recent, keep momentum; otherwise clear it
+        const timeSinceDrag = performance.now() - lastDragTime.current;
+        if (timeSinceDrag > 100) {
+          velocity.current.set(0, 0, 0);
+        }
+      }
+    };
+
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+
+      const currentDist = camera.position.length();
+      const coords = getMouseCoords(e);
+
+      // Symmetric zoom using ZOOM_SPEED constant
+      const speed = ZOOM_SPEED * zoomSpeedMod.current;
+      const zoomFactor = e.deltaY > 0 ? (1 + speed) : (1 / (1 + speed));
+
+      // Calculate new target distance with hard clamps
+      const newTarget = Math.max(MIN_CAMERA_DIST, Math.min(MAX_CAMERA_DIST, targetDistance.current * zoomFactor));
+      targetDistance.current = newTarget;
+
+      // Zoom toward cursor when zooming in (subtle effect)
+      const intersection = getGlobeIntersection(coords.x, coords.y);
+      if (intersection && currentDist < 6 && e.deltaY < 0) {
+        const currentDir = camera.position.clone().normalize();
+        const cursorDir = intersection.clone().normalize();
+        targetDirection.current.copy(currentDir).lerp(cursorDir, 0.08).normalize();
+      }
+    };
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Control') zoomSpeedMod.current = 3;
@@ -123,79 +350,102 @@ function ZoomController({ controlsRef }: { controlsRef: React.RefObject<any> }) 
       }
     };
 
-    const handleWheel = (e: WheelEvent) => {
-      e.preventDefault();
+    // Touch support
+    const handleTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 1) {
+        const touch = e.touches[0];
+        const coords = getMouseCoords(touch);
+        const intersection = getGlobeIntersection(coords.x, coords.y);
 
-      const controls = controlsRef.current;
-      if (!controls || !controls.enabled) return;
-
-      const currentDist = camera.position.length();
-
-      // Zoom speed inversely proportional to distance (much slower when very close)
-      const heightAboveSurface = currentDist - 1;
-      const distanceFactor = Math.max(0.05, Math.min(1, heightAboveSurface * 2));
-      const delta = e.deltaY * 0.0015 * zoomSpeedMod.current * distanceFactor;
-      const zoomFactor = Math.exp(delta);
-
-      // Min distance 1.002 (0.2% above surface for street-level view), max 50
-      const newDist = Math.max(1.002, Math.min(50, currentDist * zoomFactor));
-      const zoomingIn = newDist < currentDist;
-
-      // Get mouse position in normalized device coordinates (-1 to +1)
-      const rect = canvas.getBoundingClientRect();
-      const mouseX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-      const mouseY = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-
-      // Raycast from cursor to find point on globe
-      raycaster.current.setFromCamera(new THREE.Vector2(mouseX, mouseY), camera);
-      const intersectPoint = new THREE.Vector3();
-      const hit = raycaster.current.ray.intersectSphere(globeSphere.current, intersectPoint);
-
-      if (hit && currentDist < 8) {
-        const currentDir = camera.position.clone().normalize();
-        const cursorDir = intersectPoint.clone().normalize();
-
-        if (zoomingIn) {
-          // Zoom in: rotate camera towards cursor point
-          const lerpAmount = Math.min(0.4, (1 - newDist / currentDist) * 2.5);
-          const newDir = currentDir.clone().lerp(cursorDir, lerpAmount).normalize();
-          targetCameraPos.current.copy(newDir.multiplyScalar(newDist));
-        } else {
-          // Zoom out: rotate camera away from cursor point (reverse direction)
-          const lerpAmount = Math.min(0.3, (newDist / currentDist - 1) * 2);
-          // Lerp in opposite direction: away from cursor
-          const awayDir = currentDir.clone().lerp(cursorDir, -lerpAmount).normalize();
-          targetCameraPos.current.copy(awayDir.multiplyScalar(newDist));
+        if (intersection) {
+          isDragging.current = true;
+          grabPoint.current.copy(intersection);
+          velocity.current.set(0, 0, 0);
+          lastMouse.current = coords;
+          lastDragTime.current = performance.now();
         }
-      } else {
-        // No hit or too far - just scale distance
-        targetCameraPos.current.copy(camera.position).normalize().multiplyScalar(newDist);
       }
-
-      isAnimating.current = true;
     };
 
+    const handleTouchMove = (e: TouchEvent) => {
+      if (e.touches.length === 1 && isDragging.current) {
+        e.preventDefault();
+        const touch = e.touches[0];
+        const coords = getMouseCoords(touch);
+        const intersection = getGlobeIntersection(coords.x, coords.y);
+
+        if (intersection) {
+          const now = performance.now();
+          const dt = Math.max(1, now - lastDragTime.current);
+          const prevPos = camera.position.clone();
+
+          rotateCameraToPoint(intersection);
+
+          const axis = new THREE.Vector3().crossVectors(prevPos.normalize(), camera.position.clone().normalize());
+          const angle = prevPos.normalize().angleTo(camera.position.clone().normalize());
+
+          if (axis.lengthSq() > 0.00001 && dt > 0) {
+            axis.normalize();
+            const newVel = axis.multiplyScalar(angle * (16 / dt));
+            velocity.current.lerp(newVel, 0.3);
+          }
+
+          lastMouse.current = coords;
+          lastDragTime.current = now;
+        }
+      }
+    };
+
+    const handleTouchEnd = () => {
+      if (isDragging.current) {
+        isDragging.current = false;
+        const timeSinceDrag = performance.now() - lastDragTime.current;
+        if (timeSinceDrag > 100) {
+          velocity.current.set(0, 0, 0);
+        }
+      }
+    };
+
+    // Attach events
+    canvas.addEventListener('mousedown', handleMouseDown);
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    canvas.addEventListener('wheel', handleWheel, { passive: false });
+    canvas.addEventListener('touchstart', handleTouchStart, { passive: true });
+    canvas.addEventListener('touchmove', handleTouchMove, { passive: false });
+    canvas.addEventListener('touchend', handleTouchEnd);
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
-    canvas.addEventListener('wheel', handleWheel, { passive: false });
+
+    // Prevent context menu on right-click drag
+    const preventContext = (e: Event) => e.preventDefault();
+    canvas.addEventListener('contextmenu', preventContext);
 
     return () => {
+      canvas.removeEventListener('mousedown', handleMouseDown);
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+      canvas.removeEventListener('wheel', handleWheel);
+      canvas.removeEventListener('touchstart', handleTouchStart);
+      canvas.removeEventListener('touchmove', handleTouchMove);
+      canvas.removeEventListener('touchend', handleTouchEnd);
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
-      canvas.removeEventListener('wheel', handleWheel);
+      canvas.removeEventListener('contextmenu', preventContext);
     };
-  }, [camera, gl, controlsRef]);
+  }, [camera, gl]);
 
   return null;
 }
 
 /* Camera controller for fly-to + zoom level tracking */
-function CameraController({ controlsRef }: { controlsRef: React.RefObject<any> }) {
+function CameraController() {
   const { camera } = useThree();
   const { flyTo, setFlyTo, setZoomLevel } = useAppState();
   const flyToRef = useRef<{ lat: number; lng: number; phase: 'rotate' | 'zoom'; targetDir: THREE.Vector3 } | null>(null);
   const lastZoomUpdate = useRef(0);
-  const targetDistance = 1.15; // How close to zoom in when flying to location
+  const lastZoomValue = useRef(0);
+  const flyTargetDistance = 1.15; // How close to zoom in when flying to location
 
   useEffect(() => {
     if (flyTo) {
@@ -214,52 +464,47 @@ function CameraController({ controlsRef }: { controlsRef: React.RefObject<any> }
   }, [flyTo, setFlyTo]);
 
   useFrame(() => {
-    // Update zoom level in store (throttled to avoid excessive re-renders)
+    // Update zoom level in store (throttled + only when changed significantly)
     const currentDist = camera.position.length();
     const now = Date.now();
     if (now - lastZoomUpdate.current > 100) {
-      lastZoomUpdate.current = now;
-      setZoomLevel(currentDist);
+      // Only update if zoom changed by more than 1%
+      if (Math.abs(currentDist - lastZoomValue.current) > lastZoomValue.current * 0.01) {
+        lastZoomUpdate.current = now;
+        lastZoomValue.current = currentDist;
+        setZoomLevel(currentDist);
+      }
     }
 
-    // Handle fly-to animation
+    // Handle fly-to animation (uses module temp vectors)
     if (flyToRef.current) {
       const { phase, targetDir } = flyToRef.current;
-      const currentDist = camera.position.length();
+      const dist = camera.position.length();
 
       if (phase === 'rotate') {
         // Phase 1: Rotate to face the target location
-        const currentDir = camera.position.clone().normalize();
+        _tempVec3_1.copy(camera.position).normalize();
+        const alignment = _tempVec3_1.dot(targetDir);
 
-        // Check alignment BEFORE lerping
-        const alignment = currentDir.dot(targetDir);
+        _tempVec3_2.copy(_tempVec3_1).lerp(targetDir, 0.05).normalize();
+        camera.position.copy(_tempVec3_2.multiplyScalar(dist));
+        camera.lookAt(0, 0, 0);
 
-        // Lerp direction towards target (clone to avoid mutation)
-        const newDir = currentDir.clone().lerp(targetDir, 0.05).normalize();
-        camera.position.copy(newDir.multiplyScalar(currentDist));
-
-        // Move to zoom phase when facing target
         if (alignment > 0.99) {
           flyToRef.current.phase = 'zoom';
         }
       } else {
         // Phase 2: Zoom in to the target while maintaining direction
-        const currentDir = camera.position.clone().normalize();
+        _tempVec3_1.copy(camera.position).normalize();
+        _tempVec3_2.copy(_tempVec3_1).lerp(flyToRef.current.targetDir, 0.03).normalize();
+        const newDist = dist + (flyTargetDistance - dist) * 0.05;
 
-        // Keep rotating slightly towards target while zooming
-        const newDir = currentDir.clone().lerp(flyToRef.current.targetDir, 0.03).normalize();
-        const newDist = currentDist + (targetDistance - currentDist) * 0.05;
+        camera.position.copy(_tempVec3_2.multiplyScalar(newDist));
+        camera.lookAt(0, 0, 0);
 
-        camera.position.copy(newDir.multiplyScalar(newDist));
-
-        // Done when close enough to target distance
-        if (Math.abs(currentDist - targetDistance) < 0.03) {
+        if (Math.abs(dist - flyTargetDistance) < 0.03) {
           flyToRef.current = null;
         }
-      }
-
-      if (controlsRef.current) {
-        controlsRef.current.update();
       }
     }
   });
@@ -268,7 +513,7 @@ function CameraController({ controlsRef }: { controlsRef: React.RefObject<any> }
 }
 
 /* Auto-rotation that stops on user interaction, can be resumed */
-function AutoRotation({ controlsRef }: { controlsRef: React.RefObject<any> }) {
+function AutoRotation() {
   const { camera } = useThree();
   const { shouldResumeRotation, setShouldResumeRotation } = useAppState();
   const isRotating = useRef(true);
@@ -315,10 +560,7 @@ function AutoRotation({ controlsRef }: { controlsRef: React.RefObject<any> }) {
 
     camera.position.x = Math.sin(newAngle) * horizontalDist;
     camera.position.z = Math.cos(newAngle) * horizontalDist;
-
-    if (controlsRef.current) {
-      controlsRef.current.update();
-    }
+    camera.lookAt(0, 0, 0);
   });
 
   return null;
@@ -326,7 +568,6 @@ function AutoRotation({ controlsRef }: { controlsRef: React.RefObject<any> }) {
 
 function SceneContent() {
   const { pickingLocation } = useAppState();
-  const controlsRef = useRef<any>(null);
 
   return (
     <>
@@ -345,22 +586,9 @@ function SceneContent() {
         <BenchMarkers pickingLocation={pickingLocation} />
       </group>
 
-      <AutoRotation controlsRef={controlsRef} />
-      <ZoomController controlsRef={controlsRef} />
-      <CameraController controlsRef={controlsRef} />
-      <OrbitControls
-        ref={controlsRef}
-        enablePan={false}
-        enableZoom={false} // We handle zoom ourselves
-        enableRotate
-        enableDamping
-        dampingFactor={0.08}
-        mouseButtons={{
-          LEFT: THREE.MOUSE.ROTATE,
-          MIDDLE: THREE.MOUSE.ROTATE,
-          RIGHT: THREE.MOUSE.ROTATE,
-        }}
-      />
+      <AutoRotation />
+      <GlobeController />
+      <CameraController />
     </>
   );
 }

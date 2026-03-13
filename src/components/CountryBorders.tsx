@@ -9,26 +9,32 @@ import { useAppState } from '@/lib/store';
 const DEG2RAD = Math.PI / 180;
 const RADIUS = 1.0; // Exact sphere radius - no offset needed with depth bias
 
-// Vertex shader - passes through position and computes clip-space depth
+// Vertex shader - passes world position for backface culling
 const BORDER_VERTEX = /* glsl */ `
-  varying float vDepth;
+  varying vec3 vWorldPos;
 
   void main() {
+    vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-    vDepth = gl_Position.z / gl_Position.w;
   }
 `;
 
-// Fragment shader - applies depth bias to avoid z-fighting without moving geometry
+// Fragment shader - applies depth bias and backface culling
 const BORDER_FRAGMENT = /* glsl */ `
-  varying float vDepth;
+  varying vec3 vWorldPos;
   uniform vec3 uColor;
   uniform float uOpacity;
 
   void main() {
+    // Normal is normalized position (sphere centered at origin)
+    vec3 normal = normalize(vWorldPos);
+    vec3 viewDir = normalize(cameraPosition - vWorldPos);
+
+    // Discard back-facing fragments (prevents seeing through globe)
+    if (dot(normal, viewDir) < 0.05) discard;
+
     gl_FragColor = vec4(uColor, uOpacity);
     // Bias depth slightly toward camera to win depth test against sphere
-    // This is in NDC space [-1,1], a tiny bias is sufficient
     gl_FragDepth = gl_FragCoord.z - 0.00001;
   }
 `;

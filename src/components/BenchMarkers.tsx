@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useCallback, useState, useMemo, WheelEvent as ReactWheelEvent } from 'react';
+import { useRef, useCallback, useState, useMemo, WheelEvent as ReactWheelEvent, memo } from 'react';
 import { useFrame, useThree, ThreeEvent } from '@react-three/fiber';
 import { Html } from '@react-three/drei';
 import * as THREE from 'three';
@@ -76,6 +76,11 @@ function BenchIcon({ style }: { style?: React.CSSProperties }) {
   );
 }
 
+// Reusable temp vectors to avoid allocations in useFrame
+const _worldPos = new THREE.Vector3();
+const _normal = new THREE.Vector3();
+const _toCamera = new THREE.Vector3();
+
 /* A single bench marker */
 function SingleMarker({
   bench,
@@ -87,30 +92,37 @@ function SingleMarker({
   isTopBench: boolean; // Top 5 per country - always visible
 }) {
   const groupRef = useRef<THREE.Group>(null);
+  const htmlRef = useRef<HTMLDivElement>(null);
   const { camera } = useThree();
   const { setSelectedBench, transitioningBenchId } = useAppState();
-  const [visible, setVisible] = useState(true);
-  const [zoomOpacity, setZoomOpacity] = useState(1);
   const [hovered, setHovered] = useState(false);
   const handleWheel = useWheelPassthrough();
+
+  // Use refs instead of state for values updated in useFrame
+  const visibleRef = useRef(true);
+  const zoomOpacityRef = useRef(1);
 
   // Hide this marker if it's the one being transitioned (the picked location marker shows the animation)
   const isTransitioning = transitioningBenchId === bench.id;
 
+  // Precompute marker position (only changes if bench moves)
+  const markerPos = useMemo(
+    () => latLonToVec3(bench.latitude, bench.longitude, GLOBE_RADIUS + MARKER_HEIGHT),
+    [bench.latitude, bench.longitude]
+  );
+
   useFrame(() => {
     if (!groupRef.current) return;
 
-    // Position exactly on globe surface (minimal offset to avoid z-fighting)
-    const pos = latLonToVec3(bench.latitude, bench.longitude, GLOBE_RADIUS + MARKER_HEIGHT);
-    groupRef.current.position.copy(pos);
+    // Position marker
+    groupRef.current.position.copy(markerPos);
 
-    // Occlusion: marker visible if its surface normal faces the camera
-    const worldPos = new THREE.Vector3();
-    groupRef.current.getWorldPosition(worldPos);
-    const normal = worldPos.clone().normalize();
-    const toCamera = camera.position.clone().sub(worldPos).normalize();
-    const dot = normal.dot(toCamera);
-    setVisible(dot > 0.15);
+    // Occlusion check using reusable vectors (no allocations)
+    groupRef.current.getWorldPosition(_worldPos);
+    _normal.copy(_worldPos).normalize();
+    _toCamera.copy(camera.position).sub(_worldPos).normalize();
+    const dot = _normal.dot(_toCamera);
+    visibleRef.current = dot > 0.15;
 
     // Zoom-based opacity for non-top benches
     if (!isTopBench) {
@@ -118,33 +130,32 @@ function SingleMarker({
       let targetOpacity = 0;
 
       if (dist <= HIDDEN_BENCH_FADE_END) {
-        targetOpacity = 1; // Fully visible when zoomed in close
+        targetOpacity = 1;
       } else if (dist >= HIDDEN_BENCH_FADE_START) {
-        targetOpacity = 0; // Hidden when zoomed out
+        targetOpacity = 0;
       } else {
-        // Fade in as we zoom in
         targetOpacity = 1 - (dist - HIDDEN_BENCH_FADE_END) / (HIDDEN_BENCH_FADE_START - HIDDEN_BENCH_FADE_END);
       }
 
-      // Smooth transition
-      setZoomOpacity(prev => {
-        const diff = targetOpacity - prev;
-        if (Math.abs(diff) < 0.01) return targetOpacity;
-        // Fast fade-out, slower fade-in
+      const diff = targetOpacity - zoomOpacityRef.current;
+      if (Math.abs(diff) >= 0.01) {
         const speed = diff < 0 ? 0.3 : 0.15;
-        return prev + diff * speed;
-      });
+        zoomOpacityRef.current += diff * speed;
+      } else {
+        zoomOpacityRef.current = targetOpacity;
+      }
+    }
+
+    // Update DOM directly instead of triggering React re-render
+    if (htmlRef.current) {
+      const markerOpacity = (isTopBench || isSelected) ? 1 : zoomOpacityRef.current;
+      const showMarker = visibleRef.current && !isTransitioning && markerOpacity > 0.01;
+      htmlRef.current.style.opacity = showMarker ? String(markerOpacity) : '0';
+      htmlRef.current.style.pointerEvents = showMarker ? 'auto' : 'none';
     }
   });
 
   const baseSize = isSelected ? 26 : 22;
-
-  // Calculate final opacity
-  // Selected benches and top benches are always fully visible
-  const markerOpacity = (isTopBench || isSelected) ? 1 : zoomOpacity;
-
-  // Don't render if transitioning or if hidden bench has 0 opacity
-  const showMarker = visible && !isTransitioning && markerOpacity > 0.01;
 
   return (
     <group ref={groupRef}>
@@ -152,12 +163,11 @@ function SingleMarker({
         center
         zIndexRange={[0, 0]}
         style={{
-          opacity: showMarker ? markerOpacity : 0,
           transition: 'opacity 0.15s ease',
-          pointerEvents: 'none', // Let wheel events pass through
         }}
       >
         <div
+          ref={htmlRef}
           className="flex flex-col items-center select-none"
           onClick={(e) => {
             e.stopPropagation();
@@ -168,7 +178,7 @@ function SingleMarker({
           onMouseLeave={() => setHovered(false)}
           style={{
             cursor: 'pointer',
-            pointerEvents: showMarker ? 'auto' : 'none',
+            opacity: 1,
           }}
         >
           <div
