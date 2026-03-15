@@ -75,9 +75,11 @@ const LOAD_DELAY_MS = 150;
 
 // Layer colors - warm but vibrant, contrasting with globe brown (#3a2e24)
 const COLORS = {
-  roads: '#d4a55a',      // Golden amber - warm and visible
-  water: '#5b9aa8',      // Teal blue - richer, more alive
-  buildings: '#c9b896',  // Warm cream/sand - stands out from brown globe
+  roads: '#d4a55a',        // Golden amber - warm and visible
+  water: '#5b9aa8',        // Teal blue - richer, more alive
+  buildings: '#c9b896',    // Warm cream/sand - stands out from brown globe
+  countryBorders: '#e8d5b5', // Bright cream - prominent country outlines
+  stateBorders: '#b8a585',   // Muted tan - subtle state/province lines
 };
 
 function toGlobe(lat: number, lng: number): [number, number, number] {
@@ -155,6 +157,8 @@ interface TileData {
   waterLines: Segment[];
   waterFills: number[];
   buildings: number[];
+  countryBorders: Segment[];
+  stateBorders: Segment[];
 }
 
 function createLineMaterial(color: string): THREE.ShaderMaterial {
@@ -194,12 +198,16 @@ export function StreetTiles() {
   const waterLinesGeometryRef = useRef<THREE.BufferGeometry | null>(null);
   const waterFillGeometryRef = useRef<THREE.BufferGeometry | null>(null);
   const buildingsGeometryRef = useRef<THREE.BufferGeometry | null>(null);
+  const countryBordersGeometryRef = useRef<THREE.BufferGeometry | null>(null);
+  const stateBordersGeometryRef = useRef<THREE.BufferGeometry | null>(null);
 
   // Mesh refs
   const roadsMeshRef = useRef<THREE.LineSegments>(null);
   const waterLinesMeshRef = useRef<THREE.LineSegments>(null);
   const waterFillMeshRef = useRef<THREE.Mesh>(null);
   const buildingsMeshRef = useRef<THREE.Mesh>(null);
+  const countryBordersMeshRef = useRef<THREE.LineSegments>(null);
+  const stateBordersMeshRef = useRef<THREE.LineSegments>(null);
 
   // Tile data storage
   const tileData = useRef<Map<string, TileData>>(new Map());
@@ -236,6 +244,8 @@ export function StreetTiles() {
     const waterLineVerts: number[] = [];
     const waterFillVerts: number[] = [];
     const buildingVerts: number[] = [];
+    const countryBorderVerts: number[] = [];
+    const stateBorderVerts: number[] = [];
 
     tileData.current.forEach((data) => {
       // Roads
@@ -264,6 +274,24 @@ export function StreetTiles() {
       // Buildings - add all triangles
       for (let i = 0; i < data.buildings.length; i++) {
         buildingVerts.push(data.buildings[i]);
+      }
+
+      // Country borders
+      for (const seg of data.countryBorders) {
+        const [x1, y1, z1] = seg.p1;
+        const [x2, y2, z2] = seg.p2;
+        if (isPointFacingCamera(x1, y1, z1, cx, cy, cz) || isPointFacingCamera(x2, y2, z2, cx, cy, cz)) {
+          countryBorderVerts.push(x1, y1, z1, x2, y2, z2);
+        }
+      }
+
+      // State borders
+      for (const seg of data.stateBorders) {
+        const [x1, y1, z1] = seg.p1;
+        const [x2, y2, z2] = seg.p2;
+        if (isPointFacingCamera(x1, y1, z1, cx, cy, cz) || isPointFacingCamera(x2, y2, z2, cx, cy, cz)) {
+          stateBorderVerts.push(x1, y1, z1, x2, y2, z2);
+        }
       }
     });
 
@@ -308,6 +336,34 @@ export function StreetTiles() {
       geo.setAttribute('position', new THREE.Float32BufferAttribute(buildingVerts, 3));
       geo.computeBoundingSphere();
     }
+
+    // Update country border geometry
+    if (countryBorderVerts.length > 0 && countryBordersGeometryRef.current) {
+      const geo = countryBordersGeometryRef.current;
+      const posAttr = geo.getAttribute('position') as THREE.BufferAttribute;
+      if (posAttr && posAttr.array.length >= countryBorderVerts.length) {
+        (posAttr.array as Float32Array).set(countryBorderVerts);
+        posAttr.needsUpdate = true;
+        geo.setDrawRange(0, countryBorderVerts.length / 3);
+      } else {
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(countryBorderVerts, 3));
+      }
+      geo.computeBoundingSphere();
+    }
+
+    // Update state border geometry
+    if (stateBorderVerts.length > 0 && stateBordersGeometryRef.current) {
+      const geo = stateBordersGeometryRef.current;
+      const posAttr = geo.getAttribute('position') as THREE.BufferAttribute;
+      if (posAttr && posAttr.array.length >= stateBorderVerts.length) {
+        (posAttr.array as Float32Array).set(stateBorderVerts);
+        posAttr.needsUpdate = true;
+        geo.setDrawRange(0, stateBorderVerts.length / 3);
+      } else {
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(stateBorderVerts, 3));
+      }
+      geo.computeBoundingSphere();
+    }
   }, [camera]);
 
   // Load a single tile
@@ -337,6 +393,8 @@ export function StreetTiles() {
         waterLines: [],
         waterFills: [],
         buildings: [],
+        countryBorders: [],
+        stateBorders: [],
       };
 
       // Process streets layer
@@ -404,6 +462,48 @@ export function StreetTiles() {
                 const triangles = triangulateRing(ring, x, y, zoom);
                 for (let t = 0; t < triangles.length; t++) {
                   data.buildings.push(triangles[t]);
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Process boundaries layer - admin_level 2 = countries, 4 = states/provinces
+      const boundaryLayerNames = ['boundaries', 'boundary', 'admin'];
+      for (const layerName of boundaryLayerNames) {
+        const boundaryLayer = tile.layers[layerName];
+        if (boundaryLayer) {
+          for (let i = 0; i < boundaryLayer.length; i++) {
+            const feature = boundaryLayer.feature(i);
+            if (feature.type !== 2) continue; // Only line features
+
+            const props = feature.properties;
+            const adminLevel = props.admin_level || props.adminLevel || props.level;
+
+            const geom = feature.loadGeometry();
+            for (const ring of geom) {
+              for (let j = 0; j < ring.length - 1; j++) {
+                const p1 = ring[j];
+                const p2 = ring[j + 1];
+                const ll1 = tilePixelToLatLng(x, y, zoom, p1.x, p1.y);
+                const ll2 = tilePixelToLatLng(x, y, zoom, p2.x, p2.y);
+                const segment = {
+                  p1: toGlobe(ll1.lat, ll1.lng),
+                  p2: toGlobe(ll2.lat, ll2.lng),
+                };
+
+                // admin_level 2 = country borders
+                if (adminLevel === 2 || adminLevel === '2') {
+                  data.countryBorders.push(segment);
+                }
+                // admin_level 4 = state/province borders
+                else if (adminLevel === 4 || adminLevel === '4') {
+                  data.stateBorders.push(segment);
+                }
+                // If no admin_level, assume it's a country border (some schemas don't include level)
+                else if (adminLevel === undefined) {
+                  data.countryBorders.push(segment);
                 }
               }
             }
@@ -497,6 +597,16 @@ export function StreetTiles() {
       mat.uniforms.uOpacity.value = opacityRef.current * 0.6;
       buildingsMeshRef.current.visible = opacityRef.current > 0.01 && hasData;
     }
+    if (countryBordersMeshRef.current) {
+      const mat = countryBordersMeshRef.current.material as THREE.ShaderMaterial;
+      mat.uniforms.uOpacity.value = opacityRef.current * 0.95;
+      countryBordersMeshRef.current.visible = opacityRef.current > 0.01 && hasData;
+    }
+    if (stateBordersMeshRef.current) {
+      const mat = stateBordersMeshRef.current.material as THREE.ShaderMaterial;
+      mat.uniforms.uOpacity.value = opacityRef.current * 0.5;
+      stateBordersMeshRef.current.visible = opacityRef.current > 0.01 && hasData;
+    }
 
     // Don't process if not visible
     if (dist > VISIBILITY_START || !librariesLoaded.current) {
@@ -548,6 +658,8 @@ export function StreetTiles() {
   const waterLinesMaterial = useMemo(() => createLineMaterial(COLORS.water), []);
   const waterFillMaterial = useMemo(() => createFillMaterial(COLORS.water), []);
   const buildingsMaterial = useMemo(() => createFillMaterial(COLORS.buildings), []);
+  const countryBordersMaterial = useMemo(() => createLineMaterial(COLORS.countryBorders), []);
+  const stateBordersMaterial = useMemo(() => createLineMaterial(COLORS.stateBorders), []);
 
   // Create placeholder geometries
   const placeholderGeometries = useMemo(() => {
@@ -561,13 +673,17 @@ export function StreetTiles() {
     const waterLines = createPlaceholder();
     const waterFill = createPlaceholder();
     const buildings = createPlaceholder();
+    const countryBorders = createPlaceholder();
+    const stateBorders = createPlaceholder();
 
     roadsGeometryRef.current = roads;
     waterLinesGeometryRef.current = waterLines;
     waterFillGeometryRef.current = waterFill;
     buildingsGeometryRef.current = buildings;
+    countryBordersGeometryRef.current = countryBorders;
+    stateBordersGeometryRef.current = stateBorders;
 
-    return { roads, waterLines, waterFill, buildings };
+    return { roads, waterLines, waterFill, buildings, countryBorders, stateBorders };
   }, []);
 
   return (
@@ -596,12 +712,28 @@ export function StreetTiles() {
         renderOrder={5}
         visible={false}
       />
-      {/* Roads (on top) */}
+      {/* Roads */}
       <lineSegments
         ref={roadsMeshRef}
         geometry={placeholderGeometries.roads}
         material={roadsMaterial}
         renderOrder={6}
+        visible={false}
+      />
+      {/* State/province borders */}
+      <lineSegments
+        ref={stateBordersMeshRef}
+        geometry={placeholderGeometries.stateBorders}
+        material={stateBordersMaterial}
+        renderOrder={7}
+        visible={false}
+      />
+      {/* Country borders (on top) */}
+      <lineSegments
+        ref={countryBordersMeshRef}
+        geometry={placeholderGeometries.countryBorders}
+        material={countryBordersMaterial}
+        renderOrder={8}
         visible={false}
       />
     </group>

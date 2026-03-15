@@ -55,7 +55,7 @@ export function CountryBorders() {
   const { setGlobeReady } = useAppState();
 
   useEffect(() => {
-    fetch('https://unpkg.com/world-atlas@2/countries-110m.json')
+    fetch('https://unpkg.com/world-atlas@2/countries-50m.json')
       .then((r) => r.json())
       .then((topology) => {
         const countries = feature(topology, topology.objects.countries);
