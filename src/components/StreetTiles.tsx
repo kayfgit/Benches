@@ -362,7 +362,9 @@ export function StreetTiles() {
         }
       }
 
-      // Process water polygon fills
+      // Process water polygon fills - skip rectangular ocean tiles
+      // Real water bodies (lakes, rivers) have complex coastlines with many vertices
+      // Ocean tiles are simple rectangles that cause grid artifacts
       const waterPolyLayer = tile.layers['water_polygons'];
       if (waterPolyLayer) {
         for (let i = 0; i < waterPolyLayer.length; i++) {
@@ -370,6 +372,11 @@ export function StreetTiles() {
           if (feature.type === 3) {
             const geom = feature.loadGeometry();
             for (const ring of geom) {
+              // Skip simple shapes (rectangles) - likely ocean tile fills
+              // Real lakes/rivers have more complex coastlines (>10 vertices)
+              if (ring.length < 10) {
+                continue;
+              }
               const triangles = triangulateRing(ring, x, y, zoom);
               for (let t = 0; t < triangles.length; t++) {
                 data.waterFills.push(triangles[t]);
@@ -430,9 +437,7 @@ export function StreetTiles() {
       const totalFeatures = data.roads.length + data.waterLines.length +
         (data.waterFills.length / 9) + (data.buildings.length / 9);
 
-      // Always store data and log (for debugging)
       tileData.current.set(key, data);
-
 
       return totalFeatures > 0;
     } catch (e) {
@@ -540,12 +545,8 @@ export function StreetTiles() {
       if (shouldLoad) {
         const center = getCameraLookAtLatLng(camera);
 
-        // Adaptive zoom based on camera distance
-        let zoom: number;
-        if (dist < 1.02) zoom = 14;       // Very close - full detail
-        else if (dist < 1.05) zoom = 13;  // Close
-        else if (dist < 1.10) zoom = 12;  // Medium
-        else zoom = 11;                    // Far - overview
+        // Use zoom 14 for best detail - tiles accumulate, never cleared
+        const zoom = 14;
 
         // Load tiles - the function skips already-loaded tiles automatically
         loadVisibleTiles(center, zoom);

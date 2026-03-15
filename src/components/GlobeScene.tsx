@@ -96,8 +96,8 @@ function GlobeController() {
   // ===========================================
   // ZOOM LIMITS - Adjust these values as needed
   // ===========================================
-  const MIN_CAMERA_DIST = 1.0002;  // Target zoom limit (what scroll stops at)
-  const HARD_FLOOR = 1.0002;       // Absolute minimum (never go below this)
+  const MIN_CAMERA_DIST = 1.0001;  // Target zoom limit (what scroll stops at)
+  const HARD_FLOOR = 1.0001;       // Absolute minimum (never go below this)
   const MAX_CAMERA_DIST = 50;      // How far out
   // Altitude-based log zoom: fraction of log(altitude) range per scroll
   // 0.03 = ~33 scroll steps from street level to full globe view
