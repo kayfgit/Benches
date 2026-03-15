@@ -362,29 +362,9 @@ export function StreetTiles() {
         }
       }
 
-      // Process water polygon fills - skip rectangular ocean tiles
-      // Real water bodies (lakes, rivers) have complex coastlines with many vertices
-      // Ocean tiles are simple rectangles that cause grid artifacts
-      const waterPolyLayer = tile.layers['water_polygons'];
-      if (waterPolyLayer) {
-        for (let i = 0; i < waterPolyLayer.length; i++) {
-          const feature = waterPolyLayer.feature(i);
-          if (feature.type === 3) {
-            const geom = feature.loadGeometry();
-            for (const ring of geom) {
-              // Skip simple shapes (rectangles) - likely ocean tile fills
-              // Real lakes/rivers have more complex coastlines (>10 vertices)
-              if (ring.length < 10) {
-                continue;
-              }
-              const triangles = triangulateRing(ring, x, y, zoom);
-              for (let t = 0; t < triangles.length; t++) {
-                data.waterFills.push(triangles[t]);
-              }
-            }
-          }
-        }
-      }
+      // NOTE: Water polygons disabled - they cause grid artifacts at tile boundaries
+      // The DetailLayer already renders lakes from Natural Earth data
+      // Ocean doesn't need to be rendered (globe background shows through)
 
       // Process water lines (rivers, streams)
       const waterLinesLayer = tile.layers['water_lines'];
