@@ -3,10 +3,11 @@
 import { useEffect, useRef, useCallback, useMemo } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
+import earcut from 'earcut';
 import { useAppState } from '@/lib/store';
 
 const DEG2RAD = Math.PI / 180;
-const RADIUS = 1.0; // Exact radius - depth bias handles z-fighting
+const RADIUS = 1.001; // Slightly above globe surface to prevent z-fighting
 
 // Vertex shader for detail lines - passes world position for backface culling
 const DETAIL_VERTEX = /* glsl */ `
@@ -37,6 +38,36 @@ const DETAIL_FRAGMENT = /* glsl */ `
   }
 `;
 
+// Vertex shader for filled polygons (lakes)
+const FILL_VERTEX = /* glsl */ `
+  varying vec3 vWorldPos;
+  varying vec3 vNormal;
+
+  void main() {
+    vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
+    vNormal = normalize(vWorldPos); // Normal points outward from globe center
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+// Fragment shader for filled polygons with backface culling
+const FILL_FRAGMENT = /* glsl */ `
+  varying vec3 vWorldPos;
+  varying vec3 vNormal;
+  uniform vec3 uColor;
+  uniform float uOpacity;
+
+  void main() {
+    vec3 viewDir = normalize(cameraPosition - vWorldPos);
+
+    // Discard back-facing fragments
+    if (dot(vNormal, viewDir) < 0.0) discard;
+
+    gl_FragColor = vec4(uColor, uOpacity);
+    gl_FragDepth = gl_FragCoord.z - 0.00002; // Slightly more bias for fills
+  }
+`;
+
 // Create a shader material with depth bias
 function createDepthBiasMaterial(color: string, opacity: number): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
@@ -48,6 +79,21 @@ function createDepthBiasMaterial(color: string, opacity: number): THREE.ShaderMa
     },
     transparent: true,
     depthWrite: false,
+  });
+}
+
+// Create a shader material for filled polygons
+function createFillMaterial(color: string, opacity: number): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    vertexShader: FILL_VERTEX,
+    fragmentShader: FILL_FRAGMENT,
+    uniforms: {
+      uColor: { value: new THREE.Color(color) },
+      uOpacity: { value: opacity },
+    },
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
   });
 }
 
@@ -67,14 +113,99 @@ const DATA_URLS_QUALITY = {
   roads: 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_roads.geojson',
 };
 
-function toGlobe(lat: number, lon: number): [number, number, number] {
+function toGlobe(lat: number, lon: number, radius: number = RADIUS): [number, number, number] {
   const phi = (90 - lat) * DEG2RAD;
   const theta = (lon + 180) * DEG2RAD;
   return [
-    -(RADIUS * Math.sin(phi) * Math.cos(theta)),
-    RADIUS * Math.cos(phi),
-    RADIUS * Math.sin(phi) * Math.sin(theta),
+    -(radius * Math.sin(phi) * Math.cos(theta)),
+    radius * Math.cos(phi),
+    radius * Math.sin(phi) * Math.sin(theta),
   ];
+}
+
+// Triangulate a polygon ring and project onto globe
+// Returns array of triangle vertices [x1,y1,z1, x2,y2,z2, x3,y3,z3, ...]
+function triangulatePolygonOnGlobe(
+  outerRing: number[][],
+  holes: number[][][] = []
+): number[] {
+  const vertices: number[] = [];
+
+  // Skip if ring is too small
+  if (outerRing.length < 3) return vertices;
+
+  // Check for antimeridian crossing - skip polygons that span it
+  for (let i = 0; i < outerRing.length - 1; i++) {
+    if (Math.abs(outerRing[i + 1][0] - outerRing[i][0]) > 170) {
+      return vertices; // Skip this polygon
+    }
+  }
+
+  // Flatten coordinates for earcut (2D projection using lon/lat directly)
+  // This works well for relatively small polygons
+  const flatCoords: number[] = [];
+  const holeIndices: number[] = [];
+
+  // Add outer ring
+  for (const coord of outerRing) {
+    flatCoords.push(coord[0], coord[1]); // lon, lat
+  }
+
+  // Add holes
+  for (const hole of holes) {
+    holeIndices.push(flatCoords.length / 2);
+    for (const coord of hole) {
+      flatCoords.push(coord[0], coord[1]);
+    }
+  }
+
+  // Triangulate
+  const indices = earcut(flatCoords, holeIndices.length > 0 ? holeIndices : undefined, 2);
+
+  // Convert triangles to 3D globe coordinates
+  // Build a lookup from flat coords to 3D positions
+  const allCoords = [...outerRing];
+  for (const hole of holes) {
+    allCoords.push(...hole);
+  }
+
+  for (let i = 0; i < indices.length; i++) {
+    const idx = indices[i];
+    const coord = allCoords[idx];
+    if (coord) {
+      const [x, y, z] = toGlobe(coord[1], coord[0]); // lat, lon
+      vertices.push(x, y, z);
+    }
+  }
+
+  return vertices;
+}
+
+// Extract filled polygon triangles from GeoJSON
+function extractFilledPolygons(geoJson: any): number[] {
+  const allVertices: number[] = [];
+  if (!geoJson?.features) return allVertices;
+
+  for (const feature of geoJson.features) {
+    const geom = feature.geometry;
+    if (!geom) continue;
+
+    if (geom.type === 'Polygon') {
+      const outerRing = geom.coordinates[0];
+      const holes = geom.coordinates.slice(1);
+      const verts = triangulatePolygonOnGlobe(outerRing, holes);
+      allVertices.push(...verts);
+    } else if (geom.type === 'MultiPolygon') {
+      for (const polygon of geom.coordinates) {
+        const outerRing = polygon[0];
+        const holes = polygon.slice(1);
+        const verts = triangulatePolygonOnGlobe(outerRing, holes);
+        allVertices.push(...verts);
+      }
+    }
+  }
+
+  return allVertices;
 }
 
 // Check if a point is visible from camera
@@ -110,11 +241,13 @@ export function DetailLayer() {
   // Refs for mesh objects to update visibility/material directly
   const statesMeshRef = useRef<THREE.LineSegments>(null);
   const urbanMeshRef = useRef<THREE.LineSegments>(null);
-  const lakesMeshRef = useRef<THREE.LineSegments>(null);
+  const lakesOutlineMeshRef = useRef<THREE.LineSegments>(null);
+  const lakesFillMeshRef = useRef<THREE.Mesh>(null);
   const riversMeshRef = useRef<THREE.LineSegments>(null);
   const roadsMeshRef = useRef<THREE.LineSegments>(null);
 
   const segmentsRef = useRef<LayerSegments>({});
+  const lakesFillGeometryRef = useRef<THREE.BufferGeometry | null>(null);
   const lastUpdatePos = useRef(new THREE.Vector3(0, 0, 100));
   const dataLoaded = useRef(false);
   const lastPerformanceMode = useRef(performanceMode);
@@ -189,13 +322,30 @@ export function DetailLayer() {
 
         segmentsRef.current = {
           states: extractSegments(states),
-          lakes: extractSegments(lakes),
+          lakes: extractSegments(lakes), // Keep outlines too
           rivers: extractSegments(rivers),
           ...(performanceMode ? {} : {
             urban: extractSegments(urban),
             roads: extractSegments(roads),
           }),
         };
+
+        // Create filled lake geometry
+        if (lakes) {
+          const fillVertices = extractFilledPolygons(lakes);
+          if (fillVertices.length > 0) {
+            const geo = new THREE.BufferGeometry();
+            geo.setAttribute('position', new THREE.Float32BufferAttribute(fillVertices, 3));
+            geo.computeVertexNormals();
+            geo.computeBoundingSphere();
+            lakesFillGeometryRef.current = geo;
+            // Assign geometry to mesh if it exists
+            if (lakesFillMeshRef.current) {
+              lakesFillMeshRef.current.geometry = geo;
+            }
+            console.log(`Lakes: ${fillVertices.length / 9} triangles created`);
+          }
+        }
 
         dataLoaded.current = true;
       } catch (e) {
@@ -280,10 +430,17 @@ export function DetailLayer() {
       mat.uniforms.uOpacity.value = opacityRef.current * 0.45;
       urbanMeshRef.current.visible = !performanceMode && opacityRef.current > 0.01 && !!geometriesRef.current.urban;
     }
-    if (lakesMeshRef.current) {
-      const mat = lakesMeshRef.current.material as THREE.ShaderMaterial;
-      mat.uniforms.uOpacity.value = opacityRef.current * 0.55;
-      lakesMeshRef.current.visible = opacityRef.current > 0.01 && !!geometriesRef.current.lakes;
+    // Lake outlines (subtle, behind the fill)
+    if (lakesOutlineMeshRef.current) {
+      const mat = lakesOutlineMeshRef.current.material as THREE.ShaderMaterial;
+      mat.uniforms.uOpacity.value = opacityRef.current * 0.3;
+      lakesOutlineMeshRef.current.visible = opacityRef.current > 0.01 && !!geometriesRef.current.lakes;
+    }
+    // Lake fills
+    if (lakesFillMeshRef.current) {
+      const mat = lakesFillMeshRef.current.material as THREE.ShaderMaterial;
+      mat.uniforms.uOpacity.value = opacityRef.current * 0.65;
+      lakesFillMeshRef.current.visible = opacityRef.current > 0.01 && !!lakesFillGeometryRef.current;
     }
     if (riversMeshRef.current) {
       const mat = riversMeshRef.current.material as THREE.ShaderMaterial;
@@ -312,11 +469,12 @@ export function DetailLayer() {
   // Create materials with depth bias
   const statesMaterial = useMemo(() => createDepthBiasMaterial('#a89880', 0), []);
   const urbanMaterial = useMemo(() => createDepthBiasMaterial('#d4c4a8', 0), []);
-  const lakesMaterial = useMemo(() => createDepthBiasMaterial('#6a9fb5', 0), []);
-  const riversMaterial = useMemo(() => createDepthBiasMaterial('#7ab0c9', 0), []);
+  const lakesOutlineMaterial = useMemo(() => createDepthBiasMaterial('#5a8fa5', 0), []); // Slightly darker for outline
+  const lakesFillMaterial = useMemo(() => createFillMaterial('#4a7a8a', 0), []); // Muted blue-grey for fill
+  const riversMaterial = useMemo(() => createDepthBiasMaterial('#6a9fb5', 0), []);
   const roadsMaterial = useMemo(() => createDepthBiasMaterial('#c9a86a', 0), []);
 
-  // Create placeholder geometries for each layer
+  // Create placeholder geometries for each layer (lines)
   const placeholderGeometries = useMemo(() => {
     const geos: { [key: string]: THREE.BufferGeometry } = {};
     for (const key of ['states', 'urban', 'lakes', 'rivers', 'roads']) {
@@ -327,6 +485,20 @@ export function DetailLayer() {
     }
     return geos;
   }, []);
+
+  // Placeholder geometry for lake fills
+  const lakeFillPlaceholder = useMemo(() => {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute([], 3));
+    return geo;
+  }, []);
+
+  // Assign lake fill geometry to mesh when both are ready
+  useEffect(() => {
+    if (lakesFillMeshRef.current && lakesFillGeometryRef.current) {
+      lakesFillMeshRef.current.geometry = lakesFillGeometryRef.current;
+    }
+  });
 
   // Always render but control visibility via refs - avoids mount/unmount overhead
   return (
@@ -345,10 +517,19 @@ export function DetailLayer() {
         renderOrder={2}
         visible={false}
       />
+      {/* Lake fills - render first (behind outlines) */}
+      <mesh
+        ref={lakesFillMeshRef}
+        geometry={lakesFillGeometryRef.current || lakeFillPlaceholder}
+        material={lakesFillMaterial}
+        renderOrder={1}
+        visible={false}
+      />
+      {/* Lake outlines */}
       <lineSegments
-        ref={lakesMeshRef}
+        ref={lakesOutlineMeshRef}
         geometry={placeholderGeometries.lakes}
-        material={lakesMaterial}
+        material={lakesOutlineMaterial}
         renderOrder={2}
         visible={false}
       />
