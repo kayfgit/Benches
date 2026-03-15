@@ -73,11 +73,11 @@ const VISIBILITY_FULL = 1.005;
 // Debounce: wait this many ms after camera stops before loading
 const LOAD_DELAY_MS = 150;
 
-// Layer colors matching the warm earth palette
+// Layer colors - warm but vibrant, contrasting with globe brown (#3a2e24)
 const COLORS = {
-  roads: '#b89a6a',      // Warm tan for roads
-  water: '#4a7a8a',      // Muted blue for water (matches lakes)
-  buildings: '#8a7a6a',  // Muted brown for buildings
+  roads: '#d4a55a',      // Golden amber - warm and visible
+  water: '#5b9aa8',      // Teal blue - richer, more alive
+  buildings: '#c9b896',  // Warm cream/sand - stands out from brown globe
 };
 
 function toGlobe(lat: number, lng: number): [number, number, number] {
@@ -215,8 +215,6 @@ export function StreetTiles() {
   const lastCameraPos = useRef(new THREE.Vector3());
   const lastGeometryUpdatePos = useRef(new THREE.Vector3(0, 0, 100));
   const cameraStoppedAt = useRef<number | null>(null);
-  const hasLoadedCurrentView = useRef(false);
-  const lastLoadedArea = useRef<string>('');
 
   // Load vector tile parsing libraries
   useEffect(() => {
@@ -447,7 +445,7 @@ export function StreetTiles() {
   // Load tiles for current view
   const loadVisibleTiles = useCallback(async (center: { lat: number; lng: number }, zoom: number) => {
     const centerTile = latLngToTile(center.lat, center.lng, zoom);
-    const radius = 1; // 3x3 grid = 9 tiles (was 2 = 25 tiles)
+    const radius = 2; // 5x5 grid = 25 tiles max (skips already loaded)
     const n = Math.pow(2, zoom);
 
     const tilesToLoad: Array<{x: number, y: number}> = [];
@@ -496,29 +494,28 @@ export function StreetTiles() {
 
     if (roadsMeshRef.current) {
       const mat = roadsMeshRef.current.material as THREE.ShaderMaterial;
-      mat.uniforms.uOpacity.value = opacityRef.current * 0.7;
+      mat.uniforms.uOpacity.value = opacityRef.current * 0.9;
       roadsMeshRef.current.visible = opacityRef.current > 0.01 && hasData;
     }
     if (waterLinesMeshRef.current) {
       const mat = waterLinesMeshRef.current.material as THREE.ShaderMaterial;
-      mat.uniforms.uOpacity.value = opacityRef.current * 0.6;
+      mat.uniforms.uOpacity.value = opacityRef.current * 0.8;
       waterLinesMeshRef.current.visible = opacityRef.current > 0.01 && hasData;
     }
     if (waterFillMeshRef.current) {
       const mat = waterFillMeshRef.current.material as THREE.ShaderMaterial;
-      mat.uniforms.uOpacity.value = opacityRef.current * 0.5;
+      mat.uniforms.uOpacity.value = opacityRef.current * 0.7;
       waterFillMeshRef.current.visible = opacityRef.current > 0.01 && hasData;
     }
     if (buildingsMeshRef.current) {
       const mat = buildingsMeshRef.current.material as THREE.ShaderMaterial;
-      mat.uniforms.uOpacity.value = opacityRef.current * 0.35;
+      mat.uniforms.uOpacity.value = opacityRef.current * 0.6;
       buildingsMeshRef.current.visible = opacityRef.current > 0.01 && hasData;
     }
 
     // Don't process if not visible
     if (dist > VISIBILITY_START || !librariesLoaded.current) {
       cameraStoppedAt.current = null;
-      hasLoadedCurrentView.current = false;
       return;
     }
 
@@ -528,16 +525,19 @@ export function StreetTiles() {
 
     if (cameraMoved) {
       cameraStoppedAt.current = null;
-      hasLoadedCurrentView.current = false;
     } else if (cameraStoppedAt.current === null) {
       cameraStoppedAt.current = Date.now();
     }
 
-    // Load after camera stops
-    if (cameraStoppedAt.current !== null && !hasLoadedCurrentView.current) {
+    // Load tiles after camera stops - keep loading periodically while stationary
+    if (cameraStoppedAt.current !== null) {
       const stillTime = Date.now() - cameraStoppedAt.current;
 
-      if (stillTime >= LOAD_DELAY_MS) {
+      // Initial load after short delay, then periodic checks every 500ms
+      const shouldLoad = stillTime >= LOAD_DELAY_MS &&
+        (stillTime < LOAD_DELAY_MS + 50 || stillTime % 500 < 50);
+
+      if (shouldLoad) {
         const center = getCameraLookAtLatLng(camera);
 
         // Adaptive zoom based on camera distance
@@ -547,15 +547,8 @@ export function StreetTiles() {
         else if (dist < 1.10) zoom = 12;  // Medium
         else zoom = 11;                    // Far - overview
 
-        const areaKey = `${center.lat.toFixed(2)},${center.lng.toFixed(2)},${zoom}`;
-
-        if (areaKey !== lastLoadedArea.current) {
-          lastLoadedArea.current = areaKey;
-          hasLoadedCurrentView.current = true;
-          loadVisibleTiles(center, zoom);
-        } else {
-          hasLoadedCurrentView.current = true;
-        }
+        // Load tiles - the function skips already-loaded tiles automatically
+        loadVisibleTiles(center, zoom);
       }
     }
 
