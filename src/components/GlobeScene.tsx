@@ -9,7 +9,6 @@ const _tempVec3_1 = new THREE.Vector3();
 const _tempVec3_2 = new THREE.Vector3();
 const _tempQuat = new THREE.Quaternion();
 import { Earth } from './Earth';
-import { WaterLayer } from './WaterLayer';
 import { CountryBorders } from './CountryBorders';
 import { DetailLayer } from './DetailLayer';
 import { StreetTiles } from './StreetTiles';
@@ -583,16 +582,8 @@ function SceneContent() {
 
       <DustMotes count={dustCount} />
 
-      {/* Layer order follows OSM conventions (bottom to top):
-          1. Earth (land base) - renderOrder 0
-          2. WaterLayer (ocean, lakes) - renderOrder 0.5-0.6
-          3. CountryBorders - renderOrder 1
-          4. DetailLayer (rivers, roads, states) - renderOrder 2-3
-          5. StreetTiles - renderOrder 3
-          6. BenchMarkers - renderOrder 4+ */}
       <group>
         <Earth />
-        <WaterLayer />
         <CountryBorders />
         <DetailLayer />
         <StreetTiles />

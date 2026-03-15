@@ -24,8 +24,8 @@ const EARTH_FRAGMENT = /* glsl */ `
   varying vec3 vWorldPos;
 
   void main() {
-    // Ocean base color - muted blue-gray that fits warm theme
-    vec3 baseColor = vec3(0.22, 0.32, 0.38); // #384f61
+    // Flat warm brown matching Wells #3a2e24
+    vec3 baseColor = vec3(0.227, 0.180, 0.141);
 
     // Limb darkening for 3D depth
     vec3 viewDir = normalize(cameraPosition - vWorldPos);

@@ -6,7 +6,7 @@ import * as THREE from 'three';
 
 const DEG2RAD = Math.PI / 180;
 const RAD2DEG = 180 / Math.PI;
-const ROAD_RADIUS = 1.002; // Slightly above land layer (1.001) to render on top
+const ROAD_RADIUS = 1.0; // Exact radius - depth bias handles z-fighting
 
 // Vertex shader for street lines - passes world position for backface culling
 const STREET_VERTEX = /* glsl */ `

@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { useAppState } from '@/lib/store';
 
 const DEG2RAD = Math.PI / 180;
-const RADIUS = 1.002; // Slightly above land layer (1.001) to render on top
+const RADIUS = 1.0; // Exact radius - depth bias handles z-fighting
 
 // Vertex shader for detail lines - passes world position for backface culling
 const DETAIL_VERTEX = /* glsl */ `
@@ -52,9 +52,9 @@ function createDepthBiasMaterial(color: string, opacity: number): THREE.ShaderMa
 }
 
 // Natural Earth data URLs - 50m scale for performance mode, 10m for quality mode
-// Lakes removed - now handled by WaterLayer with filled polygons
 const DATA_URLS_PERFORMANCE = {
   states: 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_1_states_provinces_lines.geojson',
+  lakes: 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_lakes.geojson',
   rivers: 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_rivers_lake_centerlines.geojson',
 };
 
@@ -62,6 +62,7 @@ const DATA_URLS_PERFORMANCE = {
 const DATA_URLS_QUALITY = {
   states: 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_1_states_provinces_lines.geojson',
   urban: 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_urban_areas.geojson',
+  lakes: 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_lakes.geojson',
   rivers: 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_rivers_lake_centerlines.geojson',
   roads: 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_roads.geojson',
 };
@@ -102,16 +103,14 @@ export function DetailLayer() {
   const { performanceMode } = useAppState();
 
   // Use refs instead of state to avoid re-renders in useFrame
-  // Separate opacity refs for OSM-style zoom-based filtering
+  const opacityRef = useRef(0);
   const statesOpacityRef = useRef(0);
-  const riversOpacityRef = useRef(0);
-  const roadsOpacityRef = useRef(0);
-  const urbanOpacityRef = useRef(0);
   const geometriesRef = useRef<{ [key: string]: THREE.BufferGeometry }>({});
 
   // Refs for mesh objects to update visibility/material directly
   const statesMeshRef = useRef<THREE.LineSegments>(null);
   const urbanMeshRef = useRef<THREE.LineSegments>(null);
+  const lakesMeshRef = useRef<THREE.LineSegments>(null);
   const riversMeshRef = useRef<THREE.LineSegments>(null);
   const roadsMeshRef = useRef<THREE.LineSegments>(null);
 
@@ -135,20 +134,20 @@ export function DetailLayer() {
 
         const fetches = [
           fetch(urls.states).then(r => r.json()).catch(() => null),
+          fetch(urls.lakes).then(r => r.json()).catch(() => null),
           fetch(urls.rivers).then(r => r.json()).catch(() => null),
         ];
 
         // Only fetch urban and roads in quality mode
         if (!performanceMode) {
-          const qualityUrls = urls as typeof DATA_URLS_QUALITY;
           fetches.push(
-            fetch(qualityUrls.urban).then(r => r.json()).catch(() => null),
-            fetch(qualityUrls.roads).then(r => r.json()).catch(() => null),
+            fetch(urls.urban!).then(r => r.json()).catch(() => null),
+            fetch(urls.roads!).then(r => r.json()).catch(() => null),
           );
         }
 
         const results = await Promise.all(fetches);
-        const [states, rivers, urban, roads] = results;
+        const [states, lakes, rivers, urban, roads] = results;
 
         // Extract segments from GeoJSON
         const extractSegments = (geoJson: any): RawSegment[] => {
@@ -190,6 +189,7 @@ export function DetailLayer() {
 
         segmentsRef.current = {
           states: extractSegments(states),
+          lakes: extractSegments(lakes),
           rivers: extractSegments(rivers),
           ...(performanceMode ? {} : {
             urban: extractSegments(urban),
@@ -249,70 +249,55 @@ export function DetailLayer() {
   useFrame(() => {
     const dist = camera.position.length();
 
-    // OSM-style zoom-based layer filtering
-    // Each layer fades in at different zoom levels (distances)
-
-    // States/provinces: visible at medium zoom (dist < 2.5, fully visible at 2.0)
-    const targetStates = dist < 2.5 ? Math.min(1, (2.5 - dist) / 0.5) : 0;
-    const statesDiff = targetStates - statesOpacityRef.current;
+    // States layer - start at 2.1, fully visible at 1.8
+    const targetStatesOpacity = dist < 2.1 ? Math.min(1, (2.1 - dist) / 0.3) : 0;
+    const statesDiff = targetStatesOpacity - statesOpacityRef.current;
     if (Math.abs(statesDiff) >= 0.001) {
-      statesOpacityRef.current += statesDiff * (statesDiff < 0 ? 0.4 : 0.15);
+      const speed = statesDiff < 0 ? 0.4 : 0.15;
+      statesOpacityRef.current += statesDiff * speed;
     } else {
-      statesOpacityRef.current = targetStates;
+      statesOpacityRef.current = targetStatesOpacity;
     }
 
-    // Rivers: visible at medium-close zoom (dist < 2.2, fully visible at 1.8)
-    const targetRivers = dist < 2.2 ? Math.min(1, (2.2 - dist) / 0.4) : 0;
-    const riversDiff = targetRivers - riversOpacityRef.current;
-    if (Math.abs(riversDiff) >= 0.001) {
-      riversOpacityRef.current += riversDiff * (riversDiff < 0 ? 0.4 : 0.15);
+    // Detail layers (urban, lakes, rivers, roads) - start at 1.6, fully visible at 1.3
+    const targetOpacity = dist < 1.6 ? Math.min(1, (1.6 - dist) / 0.3) : 0;
+    const diff = targetOpacity - opacityRef.current;
+    if (Math.abs(diff) >= 0.001) {
+      const speed = diff < 0 ? 0.4 : 0.15;
+      opacityRef.current += diff * speed;
     } else {
-      riversOpacityRef.current = targetRivers;
-    }
-
-    // Roads: visible at close zoom (dist < 1.8, fully visible at 1.5)
-    const targetRoads = dist < 1.8 ? Math.min(1, (1.8 - dist) / 0.3) : 0;
-    const roadsDiff = targetRoads - roadsOpacityRef.current;
-    if (Math.abs(roadsDiff) >= 0.001) {
-      roadsOpacityRef.current += roadsDiff * (roadsDiff < 0 ? 0.4 : 0.15);
-    } else {
-      roadsOpacityRef.current = targetRoads;
-    }
-
-    // Urban areas: visible at very close zoom (dist < 1.5, fully visible at 1.2)
-    const targetUrban = dist < 1.5 ? Math.min(1, (1.5 - dist) / 0.3) : 0;
-    const urbanDiff = targetUrban - urbanOpacityRef.current;
-    if (Math.abs(urbanDiff) >= 0.001) {
-      urbanOpacityRef.current += urbanDiff * (urbanDiff < 0 ? 0.4 : 0.15);
-    } else {
-      urbanOpacityRef.current = targetUrban;
+      opacityRef.current = targetOpacity;
     }
 
     // Update material uniforms directly (no React re-render)
     if (statesMeshRef.current) {
       const mat = statesMeshRef.current.material as THREE.ShaderMaterial;
-      mat.uniforms.uOpacity.value = statesOpacityRef.current * 0.25;
+      mat.uniforms.uOpacity.value = statesOpacityRef.current * 0.3;
       statesMeshRef.current.visible = statesOpacityRef.current > 0.01 && !!geometriesRef.current.states;
-    }
-    if (riversMeshRef.current) {
-      const mat = riversMeshRef.current.material as THREE.ShaderMaterial;
-      mat.uniforms.uOpacity.value = riversOpacityRef.current * 0.5;
-      riversMeshRef.current.visible = riversOpacityRef.current > 0.01 && !!geometriesRef.current.rivers;
-    }
-    if (roadsMeshRef.current) {
-      const mat = roadsMeshRef.current.material as THREE.ShaderMaterial;
-      mat.uniforms.uOpacity.value = roadsOpacityRef.current * 0.4;
-      roadsMeshRef.current.visible = !performanceMode && roadsOpacityRef.current > 0.01 && !!geometriesRef.current.roads;
     }
     if (urbanMeshRef.current) {
       const mat = urbanMeshRef.current.material as THREE.ShaderMaterial;
-      mat.uniforms.uOpacity.value = urbanOpacityRef.current * 0.4;
-      urbanMeshRef.current.visible = !performanceMode && urbanOpacityRef.current > 0.01 && !!geometriesRef.current.urban;
+      mat.uniforms.uOpacity.value = opacityRef.current * 0.45;
+      urbanMeshRef.current.visible = !performanceMode && opacityRef.current > 0.01 && !!geometriesRef.current.urban;
+    }
+    if (lakesMeshRef.current) {
+      const mat = lakesMeshRef.current.material as THREE.ShaderMaterial;
+      mat.uniforms.uOpacity.value = opacityRef.current * 0.55;
+      lakesMeshRef.current.visible = opacityRef.current > 0.01 && !!geometriesRef.current.lakes;
+    }
+    if (riversMeshRef.current) {
+      const mat = riversMeshRef.current.material as THREE.ShaderMaterial;
+      mat.uniforms.uOpacity.value = opacityRef.current * 0.45;
+      riversMeshRef.current.visible = opacityRef.current > 0.01 && !!geometriesRef.current.rivers;
+    }
+    if (roadsMeshRef.current) {
+      const mat = roadsMeshRef.current.material as THREE.ShaderMaterial;
+      mat.uniforms.uOpacity.value = opacityRef.current * 0.4;
+      roadsMeshRef.current.visible = !performanceMode && opacityRef.current > 0.01 && !!geometriesRef.current.roads;
     }
 
     // Update geometry when camera moves significantly (throttled, adaptive threshold)
-    const anyVisible = statesOpacityRef.current > 0.01 || riversOpacityRef.current > 0.01 ||
-                       roadsOpacityRef.current > 0.01 || urbanOpacityRef.current > 0.01;
+    const anyVisible = opacityRef.current > 0.01 || statesOpacityRef.current > 0.01;
     if (dataLoaded.current && anyVisible) {
       const moved = camera.position.distanceTo(lastUpdatePos.current);
       // Smaller threshold when zoomed in close
@@ -325,16 +310,16 @@ export function DetailLayer() {
   });
 
   // Create materials with depth bias
-  // Colors follow warm earth-tone theme with water as muted blue
   const statesMaterial = useMemo(() => createDepthBiasMaterial('#a89880', 0), []);
   const urbanMaterial = useMemo(() => createDepthBiasMaterial('#d4c4a8', 0), []);
-  const riversMaterial = useMemo(() => createDepthBiasMaterial('#6a9fb5', 0), []); // Muted blue for rivers
+  const lakesMaterial = useMemo(() => createDepthBiasMaterial('#6a9fb5', 0), []);
+  const riversMaterial = useMemo(() => createDepthBiasMaterial('#7ab0c9', 0), []);
   const roadsMaterial = useMemo(() => createDepthBiasMaterial('#c9a86a', 0), []);
 
   // Create placeholder geometries for each layer
   const placeholderGeometries = useMemo(() => {
     const geos: { [key: string]: THREE.BufferGeometry } = {};
-    for (const key of ['states', 'urban', 'rivers', 'roads']) {
+    for (const key of ['states', 'urban', 'lakes', 'rivers', 'roads']) {
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.Float32BufferAttribute([], 3));
       geos[key] = geo;
@@ -344,9 +329,29 @@ export function DetailLayer() {
   }, []);
 
   // Always render but control visibility via refs - avoids mount/unmount overhead
-  // Render order follows OSM-style: rivers (2), roads (2.5), states (3)
   return (
     <group>
+      <lineSegments
+        ref={statesMeshRef}
+        geometry={placeholderGeometries.states}
+        material={statesMaterial}
+        renderOrder={2}
+        visible={false}
+      />
+      <lineSegments
+        ref={urbanMeshRef}
+        geometry={placeholderGeometries.urban}
+        material={urbanMaterial}
+        renderOrder={2}
+        visible={false}
+      />
+      <lineSegments
+        ref={lakesMeshRef}
+        geometry={placeholderGeometries.lakes}
+        material={lakesMaterial}
+        renderOrder={2}
+        visible={false}
+      />
       <lineSegments
         ref={riversMeshRef}
         geometry={placeholderGeometries.rivers}
@@ -355,24 +360,10 @@ export function DetailLayer() {
         visible={false}
       />
       <lineSegments
-        ref={urbanMeshRef}
-        geometry={placeholderGeometries.urban}
-        material={urbanMaterial}
-        renderOrder={2.5}
-        visible={false}
-      />
-      <lineSegments
         ref={roadsMeshRef}
         geometry={placeholderGeometries.roads}
         material={roadsMaterial}
-        renderOrder={2.5}
-        visible={false}
-      />
-      <lineSegments
-        ref={statesMeshRef}
-        geometry={placeholderGeometries.states}
-        material={statesMaterial}
-        renderOrder={3}
+        renderOrder={2}
         visible={false}
       />
     </group>

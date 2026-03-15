@@ -7,7 +7,7 @@ import { feature } from 'topojson-client';
 import { useAppState } from '@/lib/store';
 
 const DEG2RAD = Math.PI / 180;
-const RADIUS = 1.002; // Slightly above land layer (1.001) to render on top
+const RADIUS = 1.0; // Exact sphere radius - no offset needed with depth bias
 
 // Vertex shader - passes world position for backface culling
 const BORDER_VERTEX = /* glsl */ `
