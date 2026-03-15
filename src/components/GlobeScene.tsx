@@ -89,17 +89,19 @@ function GlobeController() {
 
   // Constants
   const DRAG_DAMPING = 0.92; // How quickly drag momentum decays (higher = more momentum)
-  const ZOOM_SMOOTHING = 0.22; // How smoothly camera approaches target distance (higher = snappier)
+  const ZOOM_SMOOTHING = 0.4; // How smoothly camera approaches target distance (higher = snappier)
   const MIN_VELOCITY = 0.0001; // Stop momentum below this threshold
   const MAX_POLAR_ANGLE = 0.5; // How close to poles camera can get (in radians from pole, ~28 degrees)
 
   // ===========================================
   // ZOOM LIMITS - Adjust these values as needed
   // ===========================================
-  const MIN_CAMERA_DIST = 1.0007;  // Target zoom limit (what scroll stops at)
+  const MIN_CAMERA_DIST = 1.0002;  // Target zoom limit (what scroll stops at)
   const HARD_FLOOR = 1.0002;       // Absolute minimum (never go below this)
   const MAX_CAMERA_DIST = 50;      // How far out
-  const ZOOM_SPEED = 0.012;        // Small steps per scroll (Google Maps style)
+  // Altitude-based log zoom: fraction of log(altitude) range per scroll
+  // 0.03 = ~33 scroll steps from street level to full globe view
+  const ZOOM_SPEED = 0.03;
 
   // Target direction for zoom-to-cursor (initialized in useEffect)
   const targetDirection = useRef(new THREE.Vector3(0, 0, 1));
@@ -326,12 +328,27 @@ function GlobeController() {
       const currentDist = camera.position.length();
       const coords = getMouseCoords(e);
 
-      // Symmetric zoom using ZOOM_SPEED constant
-      const speed = ZOOM_SPEED * zoomSpeedMod.current;
-      const zoomFactor = e.deltaY > 0 ? (1 + speed) : (1 / (1 + speed));
+      // ALTITUDE-BASED LOGARITHMIC ZOOM
+      // What matters perceptually is height above surface, not distance from center
+      // altitude = distance - 1.0 (globe radius is 1.0)
+      const GLOBE_RADIUS = 1.0;
+      const minAltitude = MIN_CAMERA_DIST - GLOBE_RADIUS; // e.g., 0.0002
+      const maxAltitude = MAX_CAMERA_DIST - GLOBE_RADIUS; // e.g., 49
+      const currentAltitude = Math.max(minAltitude, targetDistance.current - GLOBE_RADIUS);
 
-      // Calculate new target distance with hard clamps
-      const newTarget = Math.max(MIN_CAMERA_DIST, Math.min(MAX_CAMERA_DIST, targetDistance.current * zoomFactor));
+      // Work in log(altitude) space for perceptually uniform zoom
+      const logMin = Math.log(minAltitude);
+      const logMax = Math.log(maxAltitude);
+      const logCurrent = Math.log(currentAltitude);
+
+      // Each scroll moves a fixed percentage of the total log range
+      // 0.03 = ~33 scroll steps from street level to full globe
+      const logStep = (logMax - logMin) * ZOOM_SPEED * zoomSpeedMod.current;
+      const direction = e.deltaY > 0 ? 1 : -1; // positive = zoom out, negative = zoom in
+
+      const newLogAltitude = logCurrent + direction * logStep;
+      const newAltitude = Math.exp(Math.max(logMin, Math.min(logMax, newLogAltitude)));
+      const newTarget = newAltitude + GLOBE_RADIUS;
       targetDistance.current = newTarget;
 
       // Zoom toward cursor when zooming in (subtle effect)
