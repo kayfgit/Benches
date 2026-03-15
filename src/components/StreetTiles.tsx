@@ -68,7 +68,7 @@ const TILE_URL = 'https://tiles.versatiles.org/tiles/osm';
 
 // Only show street tiles when zoomed this close
 const VISIBILITY_START = 1.15;
-const VISIBILITY_FULL = 1.08;
+const VISIBILITY_FULL = 1.005;
 
 // Debounce: wait this many ms after camera stops before loading
 const LOAD_DELAY_MS = 150;
@@ -542,10 +542,10 @@ export function StreetTiles() {
 
         // Adaptive zoom based on camera distance
         let zoom: number;
-        if (dist < 1.06) zoom = 14;      // Very close - full detail
-        else if (dist < 1.08) zoom = 13; // Close
-        else if (dist < 1.12) zoom = 12; // Medium
-        else zoom = 11;                   // Far - overview
+        if (dist < 1.02) zoom = 14;       // Very close - full detail
+        else if (dist < 1.05) zoom = 13;  // Close
+        else if (dist < 1.10) zoom = 12;  // Medium
+        else zoom = 11;                    // Far - overview
 
         const areaKey = `${center.lat.toFixed(2)},${center.lng.toFixed(2)},${zoom}`;
 

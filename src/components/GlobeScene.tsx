@@ -89,16 +89,17 @@ function GlobeController() {
 
   // Constants
   const DRAG_DAMPING = 0.92; // How quickly drag momentum decays (higher = more momentum)
-  const ZOOM_SMOOTHING = 0.12; // How smoothly camera approaches target distance
+  const ZOOM_SMOOTHING = 0.22; // How smoothly camera approaches target distance (higher = snappier)
   const MIN_VELOCITY = 0.0001; // Stop momentum below this threshold
   const MAX_POLAR_ANGLE = 0.5; // How close to poles camera can get (in radians from pole, ~28 degrees)
 
   // ===========================================
   // ZOOM LIMITS - Adjust these values as needed
   // ===========================================
-  const MIN_CAMERA_DIST = 1.0006; // How close to surface (1.0 = inside globe, 1.001 = very close)
-  const MAX_CAMERA_DIST = 50;     // How far out
-  const ZOOM_SPEED = 0.05;        // How fast scroll wheel zooms (lower = slower)
+  const MIN_CAMERA_DIST = 1.0007;  // Target zoom limit (what scroll stops at)
+  const HARD_FLOOR = 1.0002;       // Absolute minimum (never go below this)
+  const MAX_CAMERA_DIST = 50;      // How far out
+  const ZOOM_SPEED = 0.012;        // Small steps per scroll (Google Maps style)
 
   // Target direction for zoom-to-cursor (initialized in useEffect)
   const targetDirection = useRef(new THREE.Vector3(0, 0, 1));
@@ -228,7 +229,7 @@ function GlobeController() {
     // Smoothly interpolate distance
     const distDiff = targetDistance.current - currentDist;
     if (Math.abs(distDiff) > 0.00001) {
-      const newDist = Math.max(MIN_CAMERA_DIST, currentDist + distDiff * ZOOM_SMOOTHING);
+      const newDist = Math.max(HARD_FLOOR, currentDist + distDiff * ZOOM_SMOOTHING);
       camera.position.normalize().multiplyScalar(newDist);
     }
 
@@ -245,10 +246,11 @@ function GlobeController() {
     // Always look at origin and enforce limits
     camera.lookAt(0, 0, 0);
 
-    // Hard clamp - absolutely prevent going inside
-    if (camera.position.length() < MIN_CAMERA_DIST) {
-      camera.position.normalize().multiplyScalar(MIN_CAMERA_DIST);
-      targetDistance.current = MIN_CAMERA_DIST;
+    // Hard clamp - absolutely prevent going inside globe
+    const camLen = camera.position.length();
+    if (camLen < HARD_FLOOR) {
+      camera.position.normalize().multiplyScalar(HARD_FLOOR);
+      targetDistance.current = Math.max(MIN_CAMERA_DIST, targetDistance.current);
     }
   });
 
@@ -610,7 +612,7 @@ export default function GlobeScene() {
   return (
     <div className={`absolute inset-0 ${pickingLocation ? 'cursor-crosshair' : ''}`}>
       <Canvas
-        camera={{ position: [0, 0.3, 2.8], fov: 50, near: 0.001, far: 100 }}
+        camera={{ position: [0, 0.3, 2.8], fov: 50, near: 0.0001, far: 100 }}
         dpr={[1, 2]}
         gl={{ antialias: true, alpha: true, powerPreference: 'high-performance' }}
         style={{
