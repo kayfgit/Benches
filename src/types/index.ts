@@ -59,12 +59,16 @@ export interface AppState {
   setPickedLocation: (loc: { lat: number; lng: number } | null) => void;
   benches: Bench[];
   setBenches: (b: Bench[]) => void;
+  topBenches: Bench[];
+  topBenchIds: Set<string>;
   addBench: (b: Bench) => void;
   removeBench: (benchId: string) => void;
   flyTo: { lat: number; lng: number } | null;
   setFlyTo: (loc: { lat: number; lng: number } | null) => void;
   zoomLevel: number;
   setZoomLevel: (level: number) => void;
+  cameraLatLng: { lat: number; lng: number } | null;
+  setCameraLatLng: (loc: { lat: number; lng: number } | null) => void;
   shouldResumeRotation: boolean;
   setShouldResumeRotation: (v: boolean) => void;
   forumButtonPulse: boolean;
@@ -87,4 +91,7 @@ export interface AppState {
   // Settings
   performanceMode: boolean;
   setPerformanceMode: (v: boolean) => void;
+  // Lazy loading
+  fetchTopBenches: () => Promise<void>;
+  fetchRegionBenches: (minLat: number, maxLat: number, minLng: number, maxLng: number) => Promise<void>;
 }

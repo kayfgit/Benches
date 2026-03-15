@@ -8,17 +8,49 @@ export async function GET(request: Request) {
     const session = await getServerSession(authOptions);
     const userId = session?.user ? (session.user as Record<string, unknown>).id as string : null;
 
+    const { searchParams } = new URL(request.url);
+    const mode = searchParams.get('mode'); // 'top' | 'region' | undefined (all)
+    const minLat = searchParams.get('minLat');
+    const maxLat = searchParams.get('maxLat');
+    const minLng = searchParams.get('minLng');
+    const maxLng = searchParams.get('maxLng');
+
+    // Build query based on mode
+    let whereClause = {};
+    let orderByClause: any = { createdAt: 'desc' };
+    let takeLimit: number | undefined = undefined;
+
+    if (mode === 'top') {
+      // Fetch top 10 globally by vote count (we'll compute votes after)
+      // For now, just fetch all and sort client-side, but limit for efficiency
+      takeLimit = 50; // Get top 50 to ensure we have enough after vote calculation
+    } else if (mode === 'region' && minLat && maxLat && minLng && maxLng) {
+      // Fetch benches within bounding box
+      whereClause = {
+        latitude: {
+          gte: parseFloat(minLat),
+          lte: parseFloat(maxLat),
+        },
+        longitude: {
+          gte: parseFloat(minLng),
+          lte: parseFloat(maxLng),
+        },
+      };
+    }
+
     const benches = await prisma.bench.findMany({
+      where: whereClause,
       include: {
         photos: true,
         user: { select: { name: true } },
         votes: true,
         comments: true,
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: orderByClause,
+      take: takeLimit,
     });
 
-    const formatted = benches.map((b) => {
+    let formatted = benches.map((b) => {
       const voteCount = b.votes.reduce((sum, v) => sum + v.value, 0);
       const userVote = userId ? b.votes.find(v => v.userId === userId)?.value || 0 : 0;
 
@@ -40,6 +72,13 @@ export async function GET(request: Request) {
         commentCount: b.comments.length,
       };
     });
+
+    // For 'top' mode, sort by votes and return top 10
+    if (mode === 'top') {
+      formatted = formatted
+        .sort((a, b) => b.voteCount - a.voteCount)
+        .slice(0, 10);
+    }
 
     return NextResponse.json(formatted);
   } catch (error) {

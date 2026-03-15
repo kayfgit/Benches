@@ -14,7 +14,7 @@ const GlobeScene = dynamic(() => import('@/components/GlobeScene'), { ssr: false
 
 export default function Home() {
   const { data: session } = useSession();
-  const { setBenches, setShowAuth, setAuthMode, showAddBench, setShowAddBench, setFlyTo, zoomLevel, setShouldResumeRotation, forumButtonPulse, setForumButtonPulse, showForum, setShowForum, selectedBench, setSelectedBench, performanceMode, setPerformanceMode } = useAppState();
+  const { setBenches, setShowAuth, setAuthMode, showAddBench, setShowAddBench, setFlyTo, zoomLevel, setShouldResumeRotation, forumButtonPulse, setForumButtonPulse, showForum, setShowForum, selectedBench, setSelectedBench, performanceMode, setPerformanceMode, fetchTopBenches } = useAppState();
   const { showToast } = useToast();
   const [titleVisible, setTitleVisible] = useState(true);
   const [shakeButton, setShakeButton] = useState<'forum' | 'addBench' | null>(null);
@@ -65,17 +65,10 @@ export default function Home() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [showForum, showAddBench, setShowAddBench, selectedBench, setSelectedBench]);
 
+  // Fetch top benches on mount - region benches are loaded lazily by BenchMarkers
   useEffect(() => {
-    fetch('/api/benches')
-      .then((res) => res.json())
-      .then((data) => {
-        if (Array.isArray(data)) setBenches(data);
-      })
-      .catch((err) => {
-        console.error('Failed to fetch benches:', err);
-        showToast('Failed to load benches', 'error');
-      });
-  }, [setBenches, showToast]);
+    fetchTopBenches();
+  }, [fetchTopBenches]);
 
   // Hide title when zoomed in
   useEffect(() => {
