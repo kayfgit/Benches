@@ -26,7 +26,7 @@ function useWheelPassthrough() {
 const DEG2RAD = Math.PI / 180;
 const RAD2DEG = 180 / Math.PI;
 const GLOBE_RADIUS = 1;
-const MARKER_HEIGHT = 0.0004; // Minimal offset above other layers for precision
+const MARKER_HEIGHT = 0; // Same as globe surface - HTML overlay handles visibility
 
 // Visibility thresholds for local benches (non-top-10 globally)
 const LOCAL_BENCH_FADE_START = 1.8; // Start fading in at this zoom level

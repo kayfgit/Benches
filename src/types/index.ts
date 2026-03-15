@@ -88,9 +88,6 @@ export interface AppState {
   setSortBy: (s: SortOption) => void;
   countries: string[];
   filteredBenches: Bench[];
-  // Settings
-  performanceMode: boolean;
-  setPerformanceMode: (v: boolean) => void;
   // Lazy loading
   fetchTopBenches: () => Promise<void>;
   fetchRegionBenches: (minLat: number, maxLat: number, minLng: number, maxLng: number) => Promise<void>;

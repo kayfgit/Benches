@@ -30,5 +30,12 @@ npx tsx prisma/seed.ts  # Seed database
   - Country borders (always visible)
   - State/province boundaries (zoom ~2.1)
   - Lakes (filled polygons), rivers, urban areas, roads (zoom ~1.6)
-  - Street tiles (zoom ~1.15, requires Mapbox token)
+  - Street tiles (zoom ~1.15) - uses OpenFreeMap (FREE, no API key)
 - Warm earth-tone aesthetic, NOT cold/space/tech
+
+## Map Tiles
+
+Uses **Versatiles OSM** for street-level detail - completely free with no API key required.
+- Roads, water bodies, buildings rendered as vector tiles
+- Tile URL: `https://tiles.versatiles.org/tiles/osm/{z}/{x}/{y}`
+- Uses OpenMapTiles schema (layers: transportation, water, waterway, building)

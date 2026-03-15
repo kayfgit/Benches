@@ -26,9 +26,6 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   // Track loaded regions to avoid re-fetching
   const loadedRegionsRef = useRef<Set<string>>(new Set());
 
-  // Settings - performance mode reduces visual quality for better FPS
-  const [performanceMode, setPerformanceMode] = useState(true); // Default ON for compatibility
-
   // Search and filter state
   const [searchQuery, setSearchQuery] = useState('');
   const [filterCountry, setFilterCountry] = useState('');
@@ -177,8 +174,6 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         sortBy, setSortBy,
         countries,
         filteredBenches,
-        // Settings
-        performanceMode, setPerformanceMode,
         // Lazy loading
         fetchTopBenches, fetchRegionBenches,
       }}

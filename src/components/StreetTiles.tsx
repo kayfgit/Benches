@@ -3,13 +3,14 @@
 import { useRef, useCallback, useEffect, useMemo } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
+import earcut from 'earcut';
 
 const DEG2RAD = Math.PI / 180;
 const RAD2DEG = 180 / Math.PI;
-const ROAD_RADIUS = 1.0; // Exact radius - depth bias handles z-fighting
+const TILE_RADIUS = 1.0; // Same as globe - depth bias handles z-fighting
 
-// Vertex shader for street lines - passes world position for backface culling
-const STREET_VERTEX = /* glsl */ `
+// Vertex shader for street lines
+const LINE_VERTEX = /* glsl */ `
   varying vec3 vWorldPos;
 
   void main() {
@@ -19,43 +20,73 @@ const STREET_VERTEX = /* glsl */ `
 `;
 
 // Fragment shader with depth bias and backface culling
-const STREET_FRAGMENT = /* glsl */ `
+const LINE_FRAGMENT = /* glsl */ `
   varying vec3 vWorldPos;
   uniform vec3 uColor;
   uniform float uOpacity;
 
   void main() {
-    // Normal is normalized position (sphere centered at origin)
     vec3 normal = normalize(vWorldPos);
     vec3 viewDir = normalize(cameraPosition - vWorldPos);
-
-    // Discard back-facing fragments
     if (dot(normal, viewDir) < 0.05) discard;
 
     gl_FragColor = vec4(uColor, uOpacity);
-    gl_FragDepth = gl_FragCoord.z - 0.00001;
+    gl_FragDepth = gl_FragCoord.z - 0.00003; // Above detail layer
   }
 `;
 
-const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+// Vertex shader for filled polygons (water, buildings)
+const FILL_VERTEX = /* glsl */ `
+  varying vec3 vWorldPos;
+  varying vec3 vNormal;
 
-// Safety limit to prevent unexpected bills
-const MAX_TILES_PER_SESSION = 500;
+  void main() {
+    vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
+    vNormal = normalize(vWorldPos);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
 
-// Only show streets when zoomed this close
+// Fragment shader for fills
+const FILL_FRAGMENT = /* glsl */ `
+  varying vec3 vWorldPos;
+  varying vec3 vNormal;
+  uniform vec3 uColor;
+  uniform float uOpacity;
+
+  void main() {
+    vec3 viewDir = normalize(cameraPosition - vWorldPos);
+    if (dot(vNormal, viewDir) < 0.0) discard;
+
+    gl_FragColor = vec4(uColor, uOpacity);
+    gl_FragDepth = gl_FragCoord.z - 0.000025; // Fills slightly behind lines
+  }
+`;
+
+// Versatiles OSM tiles - free, no API key needed!
+const TILE_URL = 'https://tiles.versatiles.org/tiles/osm';
+
+// Only show street tiles when zoomed this close
 const VISIBILITY_START = 1.15;
 const VISIBILITY_FULL = 1.08;
 
 // Debounce: wait this many ms after camera stops before loading
-const LOAD_DELAY_MS = 400;
+const LOAD_DELAY_MS = 150;
+
+// Layer colors matching the warm earth palette
+const COLORS = {
+  roads: '#b89a6a',      // Warm tan for roads
+  water: '#4a7a8a',      // Muted blue for water (matches lakes)
+  buildings: '#8a7a6a',  // Muted brown for buildings
+};
 
 function toGlobe(lat: number, lng: number): [number, number, number] {
   const phi = (90 - lat) * DEG2RAD;
   const theta = (lng + 180) * DEG2RAD;
   return [
-    -(ROAD_RADIUS * Math.sin(phi) * Math.cos(theta)),
-    ROAD_RADIUS * Math.cos(phi),
-    ROAD_RADIUS * Math.sin(phi) * Math.sin(theta),
+    -(TILE_RADIUS * Math.sin(phi) * Math.cos(theta)),
+    TILE_RADIUS * Math.cos(phi),
+    TILE_RADIUS * Math.sin(phi) * Math.sin(theta),
   ];
 }
 
@@ -74,7 +105,6 @@ function isPointFacingCamera(px: number, py: number, pz: number, cx: number, cy:
   return (nx * dx + ny * dy + nz * dz) / dlen > -0.1;
 }
 
-// Convert lat/lng to tile coordinates
 function latLngToTile(lat: number, lng: number, zoom: number): { x: number; y: number } {
   const n = Math.pow(2, zoom);
   const x = Math.floor(((lng + 180) / 360) * n);
@@ -83,7 +113,6 @@ function latLngToTile(lat: number, lng: number, zoom: number): { x: number; y: n
   return { x: Math.max(0, Math.min(n - 1, x)), y: Math.max(0, Math.min(n - 1, y)) };
 }
 
-// Convert tile pixel to lat/lng
 function tilePixelToLatLng(tileX: number, tileY: number, zoom: number, px: number, py: number, extent: number = 4096): { lat: number; lng: number } {
   const n = Math.pow(2, zoom);
   const lng = ((tileX + px / extent) / n) * 360 - 180;
@@ -92,24 +121,92 @@ function tilePixelToLatLng(tileX: number, tileY: number, zoom: number, px: numbe
   return { lat, lng };
 }
 
-interface RoadSegment {
+// Triangulate polygon for filling
+function triangulateRing(ring: Array<{x: number, y: number}>, tileX: number, tileY: number, zoom: number): number[] {
+  if (ring.length < 3) return [];
+
+  const flatCoords: number[] = [];
+  for (const pt of ring) {
+    flatCoords.push(pt.x, pt.y);
+  }
+
+  const indices = earcut(flatCoords, undefined, 2);
+  const vertices: number[] = [];
+
+  for (const idx of indices) {
+    const pt = ring[idx];
+    if (pt) {
+      const ll = tilePixelToLatLng(tileX, tileY, zoom, pt.x, pt.y);
+      const [x, y, z] = toGlobe(ll.lat, ll.lng);
+      vertices.push(x, y, z);
+    }
+  }
+
+  return vertices;
+}
+
+interface Segment {
   p1: [number, number, number];
   p2: [number, number, number];
+}
+
+interface TileData {
+  roads: Segment[];
+  waterLines: Segment[];
+  waterFills: number[];
+  buildings: number[];
+}
+
+function createLineMaterial(color: string): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    vertexShader: LINE_VERTEX,
+    fragmentShader: LINE_FRAGMENT,
+    uniforms: {
+      uColor: { value: new THREE.Color(color) },
+      uOpacity: { value: 0 },
+    },
+    transparent: true,
+    depthWrite: false,
+  });
+}
+
+function createFillMaterial(color: string): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    vertexShader: FILL_VERTEX,
+    fragmentShader: FILL_FRAGMENT,
+    uniforms: {
+      uColor: { value: new THREE.Color(color) },
+      uOpacity: { value: 0 },
+    },
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
 }
 
 export function StreetTiles() {
   const { camera } = useThree();
 
-  // Use refs instead of state to avoid re-renders in useFrame
   const opacityRef = useRef(0);
-  const geometryRef = useRef<THREE.BufferGeometry | null>(null);
-  const meshRef = useRef<THREE.LineSegments>(null);
-  const tileCountRef = useRef(0);
-  const limitReachedRef = useRef(false);
 
-  const segments = useRef<Map<string, RoadSegment[]>>(new Map());
+  // Geometry refs for each layer
+  const roadsGeometryRef = useRef<THREE.BufferGeometry | null>(null);
+  const waterLinesGeometryRef = useRef<THREE.BufferGeometry | null>(null);
+  const waterFillGeometryRef = useRef<THREE.BufferGeometry | null>(null);
+  const buildingsGeometryRef = useRef<THREE.BufferGeometry | null>(null);
+
+  // Mesh refs
+  const roadsMeshRef = useRef<THREE.LineSegments>(null);
+  const waterLinesMeshRef = useRef<THREE.LineSegments>(null);
+  const waterFillMeshRef = useRef<THREE.Mesh>(null);
+  const buildingsMeshRef = useRef<THREE.Mesh>(null);
+
+  // Tile data storage
+  const tileData = useRef<Map<string, TileData>>(new Map());
   const loadedTiles = useRef<Set<string>>(new Set());
   const loadingTiles = useRef<Set<string>>(new Set());
+
+  // Vector tile libraries
   const VectorTile = useRef<any>(null);
   const Pbf = useRef<any>(null);
   const librariesLoaded = useRef(false);
@@ -121,7 +218,7 @@ export function StreetTiles() {
   const hasLoadedCurrentView = useRef(false);
   const lastLoadedArea = useRef<string>('');
 
-  // Load the vector tile parsing libraries
+  // Load vector tile parsing libraries
   useEffect(() => {
     Promise.all([
       import('@mapbox/vector-tile'),
@@ -130,63 +227,101 @@ export function StreetTiles() {
       VectorTile.current = vt.VectorTile;
       Pbf.current = pbf.default;
       librariesLoaded.current = true;
-      console.log('Mapbox libraries loaded');
     });
   }, []);
 
-  // Rebuild geometry from current segments - reuses geometry to avoid GC
+  // Rebuild geometry from current tile data
   const rebuildGeometry = useCallback(() => {
-    const verts: number[] = [];
     const cx = camera.position.x, cy = camera.position.y, cz = camera.position.z;
 
-    segments.current.forEach((segs) => {
-      for (const seg of segs) {
+    const roadVerts: number[] = [];
+    const waterLineVerts: number[] = [];
+    const waterFillVerts: number[] = [];
+    const buildingVerts: number[] = [];
+
+    tileData.current.forEach((data) => {
+      // Roads
+      for (const seg of data.roads) {
         const [x1, y1, z1] = seg.p1;
         const [x2, y2, z2] = seg.p2;
         if (isPointFacingCamera(x1, y1, z1, cx, cy, cz) || isPointFacingCamera(x2, y2, z2, cx, cy, cz)) {
-          verts.push(x1, y1, z1, x2, y2, z2);
+          roadVerts.push(x1, y1, z1, x2, y2, z2);
         }
+      }
+
+      // Water lines (rivers, streams)
+      for (const seg of data.waterLines) {
+        const [x1, y1, z1] = seg.p1;
+        const [x2, y2, z2] = seg.p2;
+        if (isPointFacingCamera(x1, y1, z1, cx, cy, cz) || isPointFacingCamera(x2, y2, z2, cx, cy, cz)) {
+          waterLineVerts.push(x1, y1, z1, x2, y2, z2);
+        }
+      }
+
+      // Water fills - add all triangles (backface culling in shader)
+      for (let i = 0; i < data.waterFills.length; i++) {
+        waterFillVerts.push(data.waterFills[i]);
+      }
+
+      // Buildings - add all triangles
+      for (let i = 0; i < data.buildings.length; i++) {
+        buildingVerts.push(data.buildings[i]);
       }
     });
 
-    if (verts.length > 0) {
-      // Reuse existing geometry if possible, otherwise create new one
-      if (!geometryRef.current) {
-        geometryRef.current = new THREE.BufferGeometry();
-      }
-      // Update the position attribute in place
-      const posAttr = geometryRef.current.getAttribute('position') as THREE.BufferAttribute;
-      if (posAttr && posAttr.array.length >= verts.length) {
-        // Reuse existing buffer if large enough
-        (posAttr.array as Float32Array).set(verts);
+    // Update road geometry
+    if (roadVerts.length > 0 && roadsGeometryRef.current) {
+      const geo = roadsGeometryRef.current;
+      const posAttr = geo.getAttribute('position') as THREE.BufferAttribute;
+      if (posAttr && posAttr.array.length >= roadVerts.length) {
+        (posAttr.array as Float32Array).set(roadVerts);
         posAttr.needsUpdate = true;
-        geometryRef.current.setDrawRange(0, verts.length / 3);
+        geo.setDrawRange(0, roadVerts.length / 3);
       } else {
-        // Need a new buffer
-        geometryRef.current.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(roadVerts, 3));
       }
-      geometryRef.current.computeBoundingSphere();
+      geo.computeBoundingSphere();
+    }
+
+    // Update water line geometry
+    if (waterLineVerts.length > 0 && waterLinesGeometryRef.current) {
+      const geo = waterLinesGeometryRef.current;
+      const posAttr = geo.getAttribute('position') as THREE.BufferAttribute;
+      if (posAttr && posAttr.array.length >= waterLineVerts.length) {
+        (posAttr.array as Float32Array).set(waterLineVerts);
+        posAttr.needsUpdate = true;
+        geo.setDrawRange(0, waterLineVerts.length / 3);
+      } else {
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(waterLineVerts, 3));
+      }
+      geo.computeBoundingSphere();
+    }
+
+    // Update water fill geometry
+    if (waterFillVerts.length > 0 && waterFillGeometryRef.current) {
+      const geo = waterFillGeometryRef.current;
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(waterFillVerts, 3));
+      geo.computeBoundingSphere();
+    }
+
+    // Update building geometry
+    if (buildingVerts.length > 0 && buildingsGeometryRef.current) {
+      const geo = buildingsGeometryRef.current;
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(buildingVerts, 3));
+      geo.computeBoundingSphere();
     }
   }, [camera]);
 
+  // Load a single tile
   const loadTile = useCallback(async (x: number, y: number, zoom: number): Promise<boolean> => {
-    if (!librariesLoaded.current || !MAPBOX_TOKEN) return false;
-    if (limitReachedRef.current) return false;
+    if (!librariesLoaded.current) return false;
 
     const key = `${zoom}/${x}/${y}`;
     if (loadedTiles.current.has(key) || loadingTiles.current.has(key)) return false;
 
     loadingTiles.current.add(key);
 
-    // Safety check
-    if (tileCountRef.current >= MAX_TILES_PER_SESSION) {
-      console.warn(`Tile limit reached (${MAX_TILES_PER_SESSION}). Stopping to prevent charges.`);
-      limitReachedRef.current = true;
-      loadingTiles.current.delete(key);
-      return false;
-    }
-
-    const url = `https://api.mapbox.com/v4/mapbox.mapbox-streets-v8/${zoom}/${x}/${y}.mvt?access_token=${MAPBOX_TOKEN}`;
+    const url = `${TILE_URL}/${zoom}/${x}/${y}`;
 
     try {
       const response = await fetch(url);
@@ -195,28 +330,32 @@ export function StreetTiles() {
         return false;
       }
 
-      tileCountRef.current += 1;
-
       const buffer = await response.arrayBuffer();
       const tile = new VectorTile.current(new Pbf.current(buffer));
 
-      const newSegments: RoadSegment[] = [];
 
-      const roadLayer = tile.layers['road'];
-      if (roadLayer) {
-        for (let i = 0; i < roadLayer.length; i++) {
-          const feature = roadLayer.feature(i);
+      const data: TileData = {
+        roads: [],
+        waterLines: [],
+        waterFills: [],
+        buildings: [],
+      };
+
+      // Process streets layer
+      const streetsLayer = tile.layers['streets'];
+      if (streetsLayer) {
+        for (let i = 0; i < streetsLayer.length; i++) {
+          const feature = streetsLayer.feature(i);
+          if (feature.type !== 2) continue; // Only line features
           const geom = feature.loadGeometry();
 
           for (const ring of geom) {
             for (let j = 0; j < ring.length - 1; j++) {
               const p1 = ring[j];
               const p2 = ring[j + 1];
-
               const ll1 = tilePixelToLatLng(x, y, zoom, p1.x, p1.y);
               const ll2 = tilePixelToLatLng(x, y, zoom, p2.x, p2.y);
-
-              newSegments.push({
+              data.roads.push({
                 p1: toGlobe(ll1.lat, ll1.lng),
                 p2: toGlobe(ll2.lat, ll2.lng),
               });
@@ -225,17 +364,82 @@ export function StreetTiles() {
         }
       }
 
+      // Process water polygon fills
+      const waterPolyLayer = tile.layers['water_polygons'];
+      if (waterPolyLayer) {
+        for (let i = 0; i < waterPolyLayer.length; i++) {
+          const feature = waterPolyLayer.feature(i);
+          if (feature.type === 3) {
+            const geom = feature.loadGeometry();
+            for (const ring of geom) {
+              const triangles = triangulateRing(ring, x, y, zoom);
+              for (let t = 0; t < triangles.length; t++) {
+                data.waterFills.push(triangles[t]);
+              }
+            }
+          }
+        }
+      }
+
+      // Process water lines (rivers, streams)
+      const waterLinesLayer = tile.layers['water_lines'];
+      if (waterLinesLayer) {
+        for (let i = 0; i < waterLinesLayer.length; i++) {
+          const feature = waterLinesLayer.feature(i);
+          if (feature.type === 2) {
+            const geom = feature.loadGeometry();
+            for (const ring of geom) {
+              for (let j = 0; j < ring.length - 1; j++) {
+                const p1 = ring[j];
+                const p2 = ring[j + 1];
+                const ll1 = tilePixelToLatLng(x, y, zoom, p1.x, p1.y);
+                const ll2 = tilePixelToLatLng(x, y, zoom, p2.x, p2.y);
+                data.waterLines.push({
+                  p1: toGlobe(ll1.lat, ll1.lng),
+                  p2: toGlobe(ll2.lat, ll2.lng),
+                });
+              }
+            }
+          }
+        }
+      }
+
+      // Try multiple building layer names
+      const buildingLayerNames = ['buildings', 'building'];
+      for (const layerName of buildingLayerNames) {
+        const buildingLayer = tile.layers[layerName];
+        if (buildingLayer) {
+          for (let i = 0; i < buildingLayer.length; i++) {
+            const feature = buildingLayer.feature(i);
+            const geomType = feature.type;
+
+            if (geomType === 3) {
+              const geom = feature.loadGeometry();
+              for (const ring of geom) {
+                const triangles = triangulateRing(ring, x, y, zoom);
+                for (let t = 0; t < triangles.length; t++) {
+                  data.buildings.push(triangles[t]);
+                }
+              }
+            }
+          }
+        }
+      }
+
       loadedTiles.current.add(key);
       loadingTiles.current.delete(key);
 
-      if (newSegments.length > 0) {
-        segments.current.set(key, newSegments);
-        console.log(`Tile ${key}: ${newSegments.length} roads (${tileCountRef.current}/${MAX_TILES_PER_SESSION})`);
-        return true;
-      }
-      return false;
+      const totalFeatures = data.roads.length + data.waterLines.length +
+        (data.waterFills.length / 9) + (data.buildings.length / 9);
+
+      // Always store data and log (for debugging)
+      tileData.current.set(key, data);
+
+
+      return totalFeatures > 0;
     } catch (e) {
       loadingTiles.current.delete(key);
+      console.warn(`Failed to load tile ${key}:`, e);
       return false;
     }
   }, []);
@@ -243,7 +447,7 @@ export function StreetTiles() {
   // Load tiles for current view
   const loadVisibleTiles = useCallback(async (center: { lat: number; lng: number }, zoom: number) => {
     const centerTile = latLngToTile(center.lat, center.lng, zoom);
-    const radius = 2; // 5x5 grid
+    const radius = 1; // 3x3 grid = 9 tiles (was 2 = 25 tiles)
     const n = Math.pow(2, zoom);
 
     const tilesToLoad: Array<{x: number, y: number}> = [];
@@ -261,47 +465,58 @@ export function StreetTiles() {
       }
     }
 
-    // Load tiles sequentially to avoid overwhelming the API
-    let anyLoaded = false;
-    for (const tile of tilesToLoad) {
-      const loaded = await loadTile(tile.x, tile.y, zoom);
-      if (loaded) anyLoaded = true;
-    }
+    // Load tiles in parallel (Versatiles can handle it)
+    const results = await Promise.all(
+      tilesToLoad.map(tile => loadTile(tile.x, tile.y, zoom))
+    );
 
-    if (anyLoaded) {
+    if (results.some(r => r)) {
       rebuildGeometry();
     }
-
-    console.log(`Loaded ${tilesToLoad.length} new tiles for area`);
   }, [loadTile, rebuildGeometry]);
 
   useFrame(() => {
     const dist = camera.position.length();
 
-    // Opacity calculation - update ref and material directly, no React state
+    // Opacity calculation
     const targetOpacity = dist < VISIBILITY_START
       ? Math.min(1, (VISIBILITY_START - dist) / (VISIBILITY_START - VISIBILITY_FULL))
       : 0;
 
     const diff = targetOpacity - opacityRef.current;
     if (Math.abs(diff) >= 0.001) {
-      // Fast fade-out (0.4), slower fade-in (0.15)
       const speed = diff < 0 ? 0.4 : 0.15;
       opacityRef.current += diff * speed;
     } else {
       opacityRef.current = targetOpacity;
     }
 
-    // Update material opacity directly
-    if (meshRef.current) {
-      const mat = meshRef.current.material as THREE.ShaderMaterial;
+    // Update material opacities
+    const hasData = tileData.current.size > 0;
+
+    if (roadsMeshRef.current) {
+      const mat = roadsMeshRef.current.material as THREE.ShaderMaterial;
+      mat.uniforms.uOpacity.value = opacityRef.current * 0.7;
+      roadsMeshRef.current.visible = opacityRef.current > 0.01 && hasData;
+    }
+    if (waterLinesMeshRef.current) {
+      const mat = waterLinesMeshRef.current.material as THREE.ShaderMaterial;
       mat.uniforms.uOpacity.value = opacityRef.current * 0.6;
-      meshRef.current.visible = opacityRef.current > 0.01 && geometryRef.current !== null;
+      waterLinesMeshRef.current.visible = opacityRef.current > 0.01 && hasData;
+    }
+    if (waterFillMeshRef.current) {
+      const mat = waterFillMeshRef.current.material as THREE.ShaderMaterial;
+      mat.uniforms.uOpacity.value = opacityRef.current * 0.5;
+      waterFillMeshRef.current.visible = opacityRef.current > 0.01 && hasData;
+    }
+    if (buildingsMeshRef.current) {
+      const mat = buildingsMeshRef.current.material as THREE.ShaderMaterial;
+      mat.uniforms.uOpacity.value = opacityRef.current * 0.35;
+      buildingsMeshRef.current.visible = opacityRef.current > 0.01 && hasData;
     }
 
-    // Don't process if not visible or limit reached
-    if (dist > VISIBILITY_START || limitReachedRef.current || !librariesLoaded.current) {
-      // Reset debounce state when zoomed out
+    // Don't process if not visible
+    if (dist > VISIBILITY_START || !librariesLoaded.current) {
       cameraStoppedAt.current = null;
       hasLoadedCurrentView.current = false;
       return;
@@ -312,35 +527,31 @@ export function StreetTiles() {
     lastCameraPos.current.copy(camera.position);
 
     if (cameraMoved) {
-      // Camera is moving - reset debounce timer
       cameraStoppedAt.current = null;
       hasLoadedCurrentView.current = false;
     } else if (cameraStoppedAt.current === null) {
-      // Camera just stopped - start debounce timer
       cameraStoppedAt.current = Date.now();
     }
 
-    // Only load after camera has been still for LOAD_DELAY_MS
+    // Load after camera stops
     if (cameraStoppedAt.current !== null && !hasLoadedCurrentView.current) {
       const stillTime = Date.now() - cameraStoppedAt.current;
 
       if (stillTime >= LOAD_DELAY_MS) {
-        // Camera has been still long enough - load tiles
         const center = getCameraLookAtLatLng(camera);
 
-        let zoom = 14;
-        if (dist < 1.03) zoom = 16;
-        else if (dist < 1.06) zoom = 15;
-        else if (dist < 1.10) zoom = 14;
-        else zoom = 13;
+        // Adaptive zoom based on camera distance
+        let zoom: number;
+        if (dist < 1.06) zoom = 14;      // Very close - full detail
+        else if (dist < 1.08) zoom = 13; // Close
+        else if (dist < 1.12) zoom = 12; // Medium
+        else zoom = 11;                   // Far - overview
 
         const areaKey = `${center.lat.toFixed(2)},${center.lng.toFixed(2)},${zoom}`;
 
-        // Only load if this is a new area
         if (areaKey !== lastLoadedArea.current) {
           lastLoadedArea.current = areaKey;
           hasLoadedCurrentView.current = true;
-          console.log(`Camera stopped - loading tiles for ${center.lat.toFixed(2)}, ${center.lng.toFixed(2)} (zoom ${zoom})`);
           loadVisibleTiles(center, zoom);
         } else {
           hasLoadedCurrentView.current = true;
@@ -348,8 +559,8 @@ export function StreetTiles() {
       }
     }
 
-    // Rebuild geometry ONLY when camera moves significantly (not every frame!)
-    if (segments.current.size > 0 && opacityRef.current > 0.01) {
+    // Rebuild geometry when camera moves significantly
+    if (tileData.current.size > 0 && opacityRef.current > 0.01) {
       const moved = camera.position.distanceTo(lastGeometryUpdatePos.current);
       if (moved > 0.01) {
         lastGeometryUpdatePos.current.copy(camera.position);
@@ -358,36 +569,67 @@ export function StreetTiles() {
     }
   });
 
-  // Create material with depth bias
-  const material = useMemo(() => {
-    return new THREE.ShaderMaterial({
-      vertexShader: STREET_VERTEX,
-      fragmentShader: STREET_FRAGMENT,
-      uniforms: {
-        uColor: { value: new THREE.Color('#c9a86a') },
-        uOpacity: { value: 0 },
-      },
-      transparent: true,
-      depthWrite: false,
-    });
+  // Create materials
+  const roadsMaterial = useMemo(() => createLineMaterial(COLORS.roads), []);
+  const waterLinesMaterial = useMemo(() => createLineMaterial(COLORS.water), []);
+  const waterFillMaterial = useMemo(() => createFillMaterial(COLORS.water), []);
+  const buildingsMaterial = useMemo(() => createFillMaterial(COLORS.buildings), []);
+
+  // Create placeholder geometries
+  const placeholderGeometries = useMemo(() => {
+    const createPlaceholder = () => {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute([], 3));
+      return geo;
+    };
+
+    const roads = createPlaceholder();
+    const waterLines = createPlaceholder();
+    const waterFill = createPlaceholder();
+    const buildings = createPlaceholder();
+
+    roadsGeometryRef.current = roads;
+    waterLinesGeometryRef.current = waterLines;
+    waterFillGeometryRef.current = waterFill;
+    buildingsGeometryRef.current = buildings;
+
+    return { roads, waterLines, waterFill, buildings };
   }, []);
 
-  // Create a placeholder geometry that will be updated
-  const placeholderGeometry = useMemo(() => {
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute([], 3));
-    geometryRef.current = geo;
-    return geo;
-  }, []);
-
-  // Always render but control visibility via ref - avoids mount/unmount overhead
   return (
-    <lineSegments
-      ref={meshRef}
-      geometry={placeholderGeometry}
-      material={material}
-      renderOrder={3}
-      visible={false}
-    />
+    <group>
+      {/* Water fills (behind everything) */}
+      <mesh
+        ref={waterFillMeshRef}
+        geometry={placeholderGeometries.waterFill}
+        material={waterFillMaterial}
+        renderOrder={3}
+        visible={false}
+      />
+      {/* Building fills */}
+      <mesh
+        ref={buildingsMeshRef}
+        geometry={placeholderGeometries.buildings}
+        material={buildingsMaterial}
+        renderOrder={4}
+        visible={false}
+      />
+      {/* Water lines (rivers) */}
+      <lineSegments
+        ref={waterLinesMeshRef}
+        geometry={placeholderGeometries.waterLines}
+        material={waterLinesMaterial}
+        renderOrder={5}
+        visible={false}
+      />
+      {/* Roads (on top) */}
+      <lineSegments
+        ref={roadsMeshRef}
+        geometry={placeholderGeometries.roads}
+        material={roadsMaterial}
+        renderOrder={6}
+        visible={false}
+      />
+    </group>
   );
 }

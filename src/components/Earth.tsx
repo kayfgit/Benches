@@ -2,7 +2,6 @@
 
 import { useMemo } from 'react';
 import * as THREE from 'three';
-import { useAppState } from '@/lib/store';
 
 /*
   Flat matte globe - warm brown sphere with subtle limb darkening.
@@ -61,16 +60,14 @@ const ATMO_FRAGMENT = /* glsl */ `
 `;
 
 export function Earth() {
-  const { performanceMode } = useAppState();
-
-  // Performance mode: reduced segments; Quality mode: higher detail
+  // Use medium-quality geometry
   const geometry = useMemo(
-    () => new THREE.SphereGeometry(1, performanceMode ? 64 : 128, performanceMode ? 32 : 64),
-    [performanceMode]
+    () => new THREE.SphereGeometry(1, 96, 48),
+    []
   );
   const atmoGeometry = useMemo(
-    () => new THREE.SphereGeometry(1, performanceMode ? 32 : 64, performanceMode ? 16 : 32),
-    [performanceMode]
+    () => new THREE.SphereGeometry(1, 48, 24),
+    []
   );
 
   return (
