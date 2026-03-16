@@ -91,9 +91,9 @@ function createFillMaterial(color: string): THREE.ShaderMaterial {
 
 // Natural Earth data URLs - using 10m for better global coverage
 const DATA_URLS = {
-  states: 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_1_states_provinces_lines.geojson',
   lakes: 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_lakes.geojson',
   rivers: 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_rivers_lake_centerlines.geojson',
+  states: 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_1_states_provinces_lines.geojson',
 };
 
 function toGlobe(lat: number, lon: number): [number, number, number] {
@@ -221,10 +221,10 @@ export function DetailLayer() {
   const statesOpacityRef = useRef(0);
   const geometriesRef = useRef<{ [key: string]: THREE.BufferGeometry }>({});
 
-  const statesMeshRef = useRef<THREE.LineSegments>(null);
   const lakesOutlineMeshRef = useRef<THREE.LineSegments>(null);
   const lakesFillMeshRef = useRef<THREE.Mesh>(null);
   const riversMeshRef = useRef<THREE.LineSegments>(null);
+  const statesMeshRef = useRef<THREE.LineSegments>(null);
 
   const segmentsRef = useRef<LayerSegments>({});
   const lakesFillGeometryRef = useRef<THREE.BufferGeometry | null>(null);
@@ -235,10 +235,10 @@ export function DetailLayer() {
   useEffect(() => {
     const loadData = async () => {
       try {
-        const [states, lakes, rivers] = await Promise.all([
-          fetch(DATA_URLS.states).then(r => r.json()).catch(() => null),
+        const [lakes, rivers, states] = await Promise.all([
           fetch(DATA_URLS.lakes).then(r => r.json()).catch(() => null),
           fetch(DATA_URLS.rivers).then(r => r.json()).catch(() => null),
+          fetch(DATA_URLS.states).then(r => r.json()).catch(() => null),
         ]);
 
         // Extract line segments from GeoJSON
@@ -280,9 +280,9 @@ export function DetailLayer() {
         };
 
         segmentsRef.current = {
-          states: extractSegments(states),
           lakes: extractSegments(lakes),
           rivers: extractSegments(rivers),
+          states: extractSegments(states),
         };
 
         // Create filled lake geometry
@@ -349,17 +349,15 @@ export function DetailLayer() {
   useFrame(() => {
     const dist = camera.position.length();
 
-    // States layer - start at 2.1, fully visible at 1.8
-    const targetStatesOpacity = dist < 2.1 ? Math.min(1, (2.1 - dist) / 0.3) : 0;
-    const statesDiff = targetStatesOpacity - statesOpacityRef.current;
-    if (Math.abs(statesDiff) >= 0.001) {
-      statesOpacityRef.current += statesDiff * (statesDiff < 0 ? 0.4 : 0.15);
+    // Lakes/rivers - fade in at 1.6-1.3, stay visible when close
+    let targetOpacity: number;
+    if (dist > 1.6) {
+      targetOpacity = 0;
+    } else if (dist > 1.3) {
+      targetOpacity = (1.6 - dist) / 0.3; // Fading in
     } else {
-      statesOpacityRef.current = targetStatesOpacity;
+      targetOpacity = 1; // Fully visible at close zoom
     }
-
-    // Detail layers - start at 1.6, fully visible at 1.3
-    const targetOpacity = dist < 1.6 ? Math.min(1, (1.6 - dist) / 0.3) : 0;
     const diff = targetOpacity - opacityRef.current;
     if (Math.abs(diff) >= 0.001) {
       opacityRef.current += diff * (diff < 0 ? 0.4 : 0.15);
@@ -367,12 +365,7 @@ export function DetailLayer() {
       opacityRef.current = targetOpacity;
     }
 
-    // Update materials
-    if (statesMeshRef.current) {
-      const mat = statesMeshRef.current.material as THREE.ShaderMaterial;
-      mat.uniforms.uOpacity.value = statesOpacityRef.current * 0.3;
-      statesMeshRef.current.visible = statesOpacityRef.current > 0.01 && !!geometriesRef.current.states;
-    }
+    // Update lake/river materials
     if (lakesOutlineMeshRef.current) {
       const mat = lakesOutlineMeshRef.current.material as THREE.ShaderMaterial;
       mat.uniforms.uOpacity.value = opacityRef.current * 0.3;
@@ -389,9 +382,29 @@ export function DetailLayer() {
       riversMeshRef.current.visible = opacityRef.current > 0.01 && !!geometriesRef.current.rivers;
     }
 
+    // States - fade in at 2.5-2.0, stay visible when close
+    let targetStatesOpacity: number;
+    if (dist > 2.5) {
+      targetStatesOpacity = 0;
+    } else if (dist > 2.0) {
+      targetStatesOpacity = (2.5 - dist) / 0.5; // Fading in
+    } else {
+      targetStatesOpacity = 1; // Fully visible at close zoom
+    }
+    const statesDiff = targetStatesOpacity - statesOpacityRef.current;
+    if (Math.abs(statesDiff) >= 0.001) {
+      statesOpacityRef.current += statesDiff * 0.15;
+    } else {
+      statesOpacityRef.current = targetStatesOpacity;
+    }
+    if (statesMeshRef.current) {
+      const mat = statesMeshRef.current.material as THREE.ShaderMaterial;
+      mat.uniforms.uOpacity.value = statesOpacityRef.current * 0.2;
+      statesMeshRef.current.visible = statesOpacityRef.current > 0.01 && !!geometriesRef.current.states;
+    }
+
     // Update geometry when camera moves
-    const anyVisible = opacityRef.current > 0.01 || statesOpacityRef.current > 0.01;
-    if (dataLoaded.current && anyVisible) {
+    if (dataLoaded.current && (opacityRef.current > 0.01 || statesOpacityRef.current > 0.01)) {
       const moved = camera.position.distanceTo(lastUpdatePos.current);
       const updateThreshold = Math.max(0.02, dist * 0.08);
       if (moved > updateThreshold) {
@@ -402,15 +415,15 @@ export function DetailLayer() {
   });
 
   // Materials
-  const statesMaterial = useMemo(() => createLineMaterial('#a89880'), []);
   const lakesOutlineMaterial = useMemo(() => createLineMaterial('#5a8fa5'), []);
   const lakesFillMaterial = useMemo(() => createFillMaterial('#4a7a8a'), []);
   const riversMaterial = useMemo(() => createLineMaterial('#6a9fb5'), []);
+  const statesMaterial = useMemo(() => createLineMaterial('#c9b896'), []);
 
   // Placeholder geometries
   const placeholderGeometries = useMemo(() => {
     const geos: { [key: string]: THREE.BufferGeometry } = {};
-    for (const key of ['states', 'lakes', 'rivers']) {
+    for (const key of ['lakes', 'rivers', 'states']) {
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.Float32BufferAttribute([], 3));
       geos[key] = geo;
@@ -433,13 +446,6 @@ export function DetailLayer() {
 
   return (
     <group>
-      <lineSegments
-        ref={statesMeshRef}
-        geometry={placeholderGeometries.states}
-        material={statesMaterial}
-        renderOrder={2}
-        visible={false}
-      />
       <mesh
         ref={lakesFillMeshRef}
         geometry={lakesFillGeometryRef.current || lakeFillPlaceholder}
@@ -458,6 +464,13 @@ export function DetailLayer() {
         ref={riversMeshRef}
         geometry={placeholderGeometries.rivers}
         material={riversMaterial}
+        renderOrder={2}
+        visible={false}
+      />
+      <lineSegments
+        ref={statesMeshRef}
+        geometry={placeholderGeometries.states}
+        material={statesMaterial}
         renderOrder={2}
         visible={false}
       />
