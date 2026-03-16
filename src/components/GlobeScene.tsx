@@ -107,6 +107,10 @@ function GlobeController() {
   const targetDirection = useRef(new THREE.Vector3(0, 0, 1));
   // Track when user last zoomed (for zoom-to-cursor timing)
   const lastZoomTime = useRef(0);
+  // Track when user last interacted (to know when to sync with external camera changes)
+  const lastInteractionTime = useRef(0);
+  // Track last camera distance to detect external movement (fly-to)
+  const lastCameraDist = useRef(0);
 
   // Initialize target direction from actual camera position
   useEffect(() => {
@@ -213,6 +217,18 @@ function GlobeController() {
     // Clamp target distance (single source of truth)
     targetDistance.current = Math.max(MIN_CAMERA_DIST, Math.min(MAX_CAMERA_DIST, targetDistance.current));
 
+    // Detect if external animation (fly-to) is moving the camera
+    const distChange = Math.abs(currentDist - lastCameraDist.current);
+    const isExternallyAnimating = distChange > 0.01;
+    lastCameraDist.current = currentDist;
+
+    // Sync with camera when not recently interacted AND not being animated externally
+    const timeSinceInteraction = performance.now() - lastInteractionTime.current;
+    if (timeSinceInteraction > 200 && !isDragging.current && !isExternallyAnimating) {
+      targetDistance.current = currentDist;
+      targetDirection.current.copy(_tempVec3_1);
+    }
+
     // When dragging, always sync targetDirection to prevent rubber banding
     if (isDragging.current) {
       targetDirection.current.copy(_tempVec3_1);
@@ -230,11 +246,13 @@ function GlobeController() {
       velocity.current.multiplyScalar(DRAG_DAMPING);
     }
 
-    // Smoothly interpolate distance
-    const distDiff = targetDistance.current - currentDist;
-    if (Math.abs(distDiff) > 0.00001) {
-      const newDist = Math.max(HARD_FLOOR, currentDist + distDiff * ZOOM_SMOOTHING);
-      camera.position.normalize().multiplyScalar(newDist);
+    // Smoothly interpolate distance (but not during external animations like fly-to)
+    if (!isExternallyAnimating) {
+      const distDiff = targetDistance.current - currentDist;
+      if (Math.abs(distDiff) > 0.00001) {
+        const newDist = Math.max(HARD_FLOOR, currentDist + distDiff * ZOOM_SMOOTHING);
+        camera.position.normalize().multiplyScalar(newDist);
+      }
     }
 
     // Smoothly interpolate direction (for zoom-to-cursor) - only shortly after zooming
@@ -275,6 +293,7 @@ function GlobeController() {
         velocity.current.set(0, 0, 0); // Stop momentum
         lastMouse.current = coords;
         lastDragTime.current = performance.now();
+        lastInteractionTime.current = performance.now();
         canvas.style.cursor = 'grabbing';
       }
     };
@@ -327,6 +346,7 @@ function GlobeController() {
 
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
+      lastInteractionTime.current = performance.now();
 
       const currentDist = camera.position.length();
       const coords = getMouseCoords(e);
@@ -388,6 +408,7 @@ function GlobeController() {
           velocity.current.set(0, 0, 0);
           lastMouse.current = coords;
           lastDragTime.current = performance.now();
+          lastInteractionTime.current = performance.now();
         }
       }
     };
@@ -470,7 +491,7 @@ function CameraController() {
   const flyToRef = useRef<{ lat: number; lng: number; phase: 'rotate' | 'zoom'; targetDir: THREE.Vector3 } | null>(null);
   const lastZoomUpdate = useRef(0);
   const lastZoomValue = useRef(0);
-  const flyTargetDistance = 1.15; // How close to zoom in when flying to location
+  const flyTargetDistance = 1.05; // How close to zoom in when flying to location (street level)
 
   useEffect(() => {
     if (flyTo) {
@@ -503,33 +524,22 @@ function CameraController() {
 
     // Handle fly-to animation (uses module temp vectors)
     if (flyToRef.current) {
-      const { phase, targetDir } = flyToRef.current;
+      const { targetDir } = flyToRef.current;
       const dist = camera.position.length();
 
-      if (phase === 'rotate') {
-        // Phase 1: Rotate to face the target location
-        _tempVec3_1.copy(camera.position).normalize();
-        const alignment = _tempVec3_1.dot(targetDir);
+      // Rotate toward target (faster rotation)
+      _tempVec3_1.copy(camera.position).normalize();
+      _tempVec3_2.copy(_tempVec3_1).lerp(targetDir, 0.1).normalize();
 
-        _tempVec3_2.copy(_tempVec3_1).lerp(targetDir, 0.05).normalize();
-        camera.position.copy(_tempVec3_2.multiplyScalar(dist));
-        camera.lookAt(0, 0, 0);
+      // Zoom in simultaneously
+      const newDist = dist + (flyTargetDistance - dist) * 0.1;
 
-        if (alignment > 0.99) {
-          flyToRef.current.phase = 'zoom';
-        }
-      } else {
-        // Phase 2: Zoom in to the target while maintaining direction
-        _tempVec3_1.copy(camera.position).normalize();
-        _tempVec3_2.copy(_tempVec3_1).lerp(flyToRef.current.targetDir, 0.03).normalize();
-        const newDist = dist + (flyTargetDistance - dist) * 0.05;
+      camera.position.copy(_tempVec3_2.multiplyScalar(newDist));
+      camera.lookAt(0, 0, 0);
 
-        camera.position.copy(_tempVec3_2.multiplyScalar(newDist));
-        camera.lookAt(0, 0, 0);
-
-        if (Math.abs(dist - flyTargetDistance) < 0.03) {
-          flyToRef.current = null;
-        }
+      // Complete when zoom reaches target (alignment continues naturally)
+      if (newDist < flyTargetDistance + 0.01) {
+        flyToRef.current = null;
       }
     }
   });

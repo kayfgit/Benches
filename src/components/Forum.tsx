@@ -778,7 +778,7 @@ export function ForumPanel() {
           {/* Title - matching globe view style */}
           <div className="p-6">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-gold to-gold-light flex items-center justify-center shadow-lg">
+              <div className="w-10 h-10 flex-shrink-0 rounded-xl bg-gradient-to-br from-gold to-gold-light flex items-center justify-center shadow-lg">
                 <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#17130e" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M4 18h16" />
                   <path d="M4 14h16" />
