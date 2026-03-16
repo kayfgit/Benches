@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { writeFile, mkdir } from 'fs/promises';
+import { getSupabase } from '@/lib/supabase';
 import path from 'path';
 
 export async function POST(request: Request) {
@@ -23,13 +23,29 @@ export async function POST(request: Request) {
 
     const ext = path.extname(file.name) || '.jpg';
     const safeName = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`;
-    const uploadDir = path.join(process.cwd(), 'public', 'uploads');
 
-    await mkdir(uploadDir, { recursive: true });
-    await writeFile(path.join(uploadDir, safeName), buffer);
+    // Upload to Supabase Storage
+    const supabase = getSupabase();
+    const { error } = await supabase.storage
+      .from('photos')
+      .upload(safeName, buffer, {
+        contentType: file.type,
+        upsert: false,
+      });
 
-    return NextResponse.json({ url: `/uploads/${safeName}` });
-  } catch {
+    if (error) {
+      console.error('Supabase upload error:', error);
+      return NextResponse.json({ error: 'Upload failed' }, { status: 500 });
+    }
+
+    // Get public URL
+    const { data: { publicUrl } } = supabase.storage
+      .from('photos')
+      .getPublicUrl(safeName);
+
+    return NextResponse.json({ url: publicUrl });
+  } catch (err) {
+    console.error('Upload error:', err);
     return NextResponse.json({ error: 'Upload failed' }, { status: 500 });
   }
 }

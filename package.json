@@ -15,6 +15,7 @@
     "@prisma/client": "^5.20.0",
     "@react-three/drei": "^9.114.3",
     "@react-three/fiber": "^8.17.10",
+    "@supabase/supabase-js": "^2.99.2",
     "bcryptjs": "^2.4.3",
     "earcut": "^3.0.2",
     "next": "14.2.15",
