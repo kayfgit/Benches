@@ -6,6 +6,17 @@ import { useAppState } from '@/lib/store';
 import { useToast } from '@/components/Toast';
 import type { Bench } from '@/types';
 
+type NearbyBench = {
+  id: string;
+  name: string;
+  description: string;
+  latitude: number;
+  longitude: number;
+  thumbnail: string | null;
+  userName: string;
+  distance: number;
+};
+
 // Admin email - matches Forum.tsx
 const ADMIN_EMAIL = process.env.NEXT_PUBLIC_ADMIN_EMAIL || 'test@test.com';
 
@@ -272,6 +283,9 @@ export function AddBenchPanel() {
     addBench,
     setForumButtonPulse,
     setTransitioningBenchId,
+    benches,
+    setSelectedBench,
+    setFlyTo,
   } = useAppState();
   const { showToast } = useToast();
 
@@ -287,6 +301,9 @@ export function AddBenchPanel() {
   const [error, setError] = useState('');
   const [shakeFields, setShakeFields] = useState<Set<string>>(new Set());
   const [successAnimation, setSuccessAnimation] = useState<'collapse' | 'square' | 'circle' | 'fly' | null>(null);
+  const [nearbyBenches, setNearbyBenches] = useState<NearbyBench[]>([]);
+  const [checkingNearby, setCheckingNearby] = useState(false);
+  const [dismissedNearby, setDismissedNearby] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -351,6 +368,34 @@ export function AddBenchPanel() {
     };
 
     detectLocation();
+  }, [pickedLocation]);
+
+  // Check for nearby benches when location is picked
+  useEffect(() => {
+    if (!pickedLocation) {
+      setNearbyBenches([]);
+      setDismissedNearby(false);
+      return;
+    }
+
+    const checkNearby = async () => {
+      setCheckingNearby(true);
+      try {
+        const res = await fetch(
+          `/api/benches/nearby?lat=${pickedLocation.lat}&lng=${pickedLocation.lng}&radius=50`
+        );
+        if (res.ok) {
+          const data = await res.json();
+          setNearbyBenches(data);
+        }
+      } catch {
+        // Silently fail - not critical
+      } finally {
+        setCheckingNearby(false);
+      }
+    };
+
+    checkNearby();
   }, [pickedLocation]);
 
   if (!showAddBench || !session) return null;
@@ -477,6 +522,8 @@ export function AddBenchPanel() {
     setError('');
     setSubmitting(false);
     setSuccessAnimation(null);
+    setNearbyBenches([]);
+    setDismissedNearby(false);
   };
 
   const close = () => {
@@ -491,6 +538,8 @@ export function AddBenchPanel() {
     setPhotos([]);
     setError('');
     setSuccessAnimation(null);
+    setNearbyBenches([]);
+    setDismissedNearby(false);
   };
 
   // Show the animated bench icon circle during circle/fly phases
@@ -718,6 +767,86 @@ export function AddBenchPanel() {
               </div>
             )}
           </div>
+
+          {/* Nearby benches warning */}
+          {pickedLocation && nearbyBenches.length > 0 && !dismissedNearby && (
+            <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30">
+              <div className="flex items-start gap-2 mb-3">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="text-amber-400 flex-shrink-0 mt-0.5">
+                  <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                  <path d="M12 9v4M12 17h.01" />
+                </svg>
+                <div>
+                  <p className="text-amber-200 text-sm font-medium">
+                    {nearbyBenches.length === 1 ? 'A bench already exists nearby' : `${nearbyBenches.length} benches already exist nearby`}
+                  </p>
+                  <p className="text-amber-200/70 text-xs mt-0.5">
+                    Is this the same bench? You can view it or continue if it&apos;s different.
+                  </p>
+                </div>
+              </div>
+
+              {/* Nearby bench cards */}
+              <div className="space-y-2 mb-3">
+                {nearbyBenches.slice(0, 3).map((bench) => (
+                  <button
+                    key={bench.id}
+                    type="button"
+                    onClick={() => {
+                      // Close add panel and select this bench
+                      close();
+                      // Find the full bench from the store and select it
+                      const fullBench = benches.find((b: Bench) => b.id === bench.id);
+                      if (fullBench) {
+                        setSelectedBench(fullBench);
+                        setFlyTo({ lat: fullBench.latitude, lng: fullBench.longitude });
+                      }
+                    }}
+                    className="w-full flex items-center gap-3 p-2 rounded-lg bg-surface/50 hover:bg-surface transition-colors text-left"
+                  >
+                    {bench.thumbnail ? (
+                      <img
+                        src={bench.thumbnail}
+                        alt={bench.name}
+                        className="w-12 h-12 rounded-lg object-cover flex-shrink-0"
+                      />
+                    ) : (
+                      <div className="w-12 h-12 rounded-lg bg-ridge/50 flex items-center justify-center flex-shrink-0">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="text-text-muted">
+                          <path d="M5 6h14M6 6v5M18 6v5M3 11h18M5 11v6M19 11v6" />
+                        </svg>
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-text-primary text-sm font-medium truncate">{bench.name}</p>
+                      <p className="text-text-muted text-xs">
+                        {Math.round(bench.distance)}m away · by {bench.userName}
+                      </p>
+                    </div>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="text-text-muted flex-shrink-0">
+                      <path d="M9 18l6-6-6-6" />
+                    </svg>
+                  </button>
+                ))}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setDismissedNearby(true)}
+                className="w-full py-2 px-3 rounded-lg bg-surface/50 hover:bg-surface text-text-secondary text-sm transition-colors"
+              >
+                This is a different bench, continue
+              </button>
+            </div>
+          )}
+
+          {/* Loading state for nearby check */}
+          {pickedLocation && checkingNearby && (
+            <div className="flex items-center gap-2 text-xs text-text-muted">
+              <div className="w-3 h-3 border border-text-muted border-t-transparent rounded-full animate-spin" />
+              Checking for nearby benches...
+            </div>
+          )}
 
           <div className={shakeFields.has('name') ? 'animate-field-shake' : ''}>
             <label className="block text-sm text-text-secondary mb-1.5 font-medium">

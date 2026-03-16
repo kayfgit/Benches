@@ -105,6 +105,8 @@ function GlobeController() {
 
   // Target direction for zoom-to-cursor (initialized in useEffect)
   const targetDirection = useRef(new THREE.Vector3(0, 0, 1));
+  // Track when user last zoomed (for zoom-to-cursor timing)
+  const lastZoomTime = useRef(0);
 
   // Initialize target direction from actual camera position
   useEffect(() => {
@@ -235,8 +237,9 @@ function GlobeController() {
       camera.position.normalize().multiplyScalar(newDist);
     }
 
-    // Smoothly interpolate direction (for zoom-to-cursor) - only when not dragging
-    if (!isDragging.current) {
+    // Smoothly interpolate direction (for zoom-to-cursor) - only shortly after zooming
+    const timeSinceZoom = performance.now() - lastZoomTime.current;
+    if (!isDragging.current && timeSinceZoom < 500) {
       const dirDot = _tempVec3_1.dot(targetDirection.current);
       if (dirDot < 0.9999 && dirDot > 0.99) { // Only interpolate if close enough (prevents jumps)
         _tempVec3_2.copy(_tempVec3_1).lerp(targetDirection.current, ZOOM_SMOOTHING).normalize();
@@ -357,6 +360,7 @@ function GlobeController() {
         const currentDir = camera.position.clone().normalize();
         const cursorDir = intersection.clone().normalize();
         targetDirection.current.copy(currentDir).lerp(cursorDir, 0.08).normalize();
+        lastZoomTime.current = performance.now();
       }
     };
 

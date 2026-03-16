@@ -1,5 +1,9 @@
 # BenchFinder - Claude Instructions
 
+## Environment Notes
+
+**Bash errors:** The Windows username contains a space ("KAYF IAN"), which causes a harmless "Permission denied" error after every bash command. Ignore these - the commands still execute successfully.
+
 ## Development Server
 
 **DO NOT run `npm run dev` automatically.** Let the user start the dev server manually.
@@ -25,6 +29,7 @@ npx tsx prisma/seed.ts  # Seed database
 
 ## Architecture
 
+- **State management:** React Context (`src/lib/store.tsx`), NOT Zustand
 - Globe rendered with react-three-fiber (SSR disabled via dynamic import)
 - Layers render based on zoom level:
   - Country borders (always visible)
