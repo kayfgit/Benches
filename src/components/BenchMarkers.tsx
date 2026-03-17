@@ -90,12 +90,10 @@ function SingleMarker({
   bench,
   isSelected,
   isTopBench,
-  rank,
 }: {
   bench: Bench;
   isSelected: boolean;
   isTopBench: boolean; // Top 10 globally - always visible with special styling
-  rank?: number; // 1-10 for top benches
 }) {
   const groupRef = useRef<THREE.Group>(null);
   const htmlRef = useRef<HTMLDivElement>(null);
@@ -214,30 +212,6 @@ function SingleMarker({
                 : '0 1px 6px rgba(0,0,0,0.3)',
             }}
           >
-            {/* Rank badge for top 3 */}
-            {isTopBench && rank && rank <= 3 && !isSelected && (
-              <div
-                style={{
-                  position: 'absolute',
-                  top: -6,
-                  right: -6,
-                  width: 14,
-                  height: 14,
-                  borderRadius: '50%',
-                  background: rank === 1 ? '#ffd700' : rank === 2 ? '#c0c0c0' : '#cd7f32',
-                  transform: 'rotate(45deg)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: 8,
-                  fontWeight: 700,
-                  color: '#17130e',
-                  boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
-                }}
-              >
-                {rank}
-              </div>
-            )}
             <div
               style={{
                 transform: 'rotate(45deg)',
@@ -618,7 +592,6 @@ export function BenchMarkers({
   const {
     selectedBench,
     filteredBenches,
-    topBenches,
     topBenchIds,
     zoomLevel,
     fetchRegionBenches,
@@ -628,14 +601,6 @@ export function BenchMarkers({
   const lastFetchPos = useRef<THREE.Vector3>(new THREE.Vector3());
   const lastFetchZoom = useRef<number>(10);
 
-  // Get rank for top benches
-  const topBenchRanks = useMemo(() => {
-    const ranks = new Map<string, number>();
-    topBenches.forEach((bench, index) => {
-      ranks.set(bench.id, index + 1);
-    });
-    return ranks;
-  }, [topBenches]);
 
   // Determine if we should show clusters or individual markers
   const showClusters = zoomLevel > CLUSTER_ZOOM_THRESHOLD;
@@ -700,7 +665,6 @@ export function BenchMarkers({
           bench={bench}
           isSelected={selectedBench?.id === bench.id}
           isTopBench={topBenchIds.has(bench.id)}
-          rank={topBenchRanks.get(bench.id)}
         />
       ))}
 
