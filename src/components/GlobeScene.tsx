@@ -219,7 +219,7 @@ function GlobeController() {
 
     // Detect if external animation (fly-to) is moving the camera
     const distChange = Math.abs(currentDist - lastCameraDist.current);
-    const isExternallyAnimating = distChange > 0.01;
+    const isExternallyAnimating = distChange > 0.0005;
     lastCameraDist.current = currentDist;
 
     // Sync with camera when not recently interacted AND not being animated externally
@@ -527,18 +527,19 @@ function CameraController() {
       const { targetDir } = flyToRef.current;
       const dist = camera.position.length();
 
-      // Rotate toward target (faster rotation)
+      // Rotate toward target
       _tempVec3_1.copy(camera.position).normalize();
-      _tempVec3_2.copy(_tempVec3_1).lerp(targetDir, 0.1).normalize();
+      const rotSpeed = 0.1;
+      _tempVec3_2.copy(_tempVec3_1).lerp(targetDir, rotSpeed).normalize();
 
-      // Zoom in simultaneously
-      const newDist = dist + (flyTargetDistance - dist) * 0.1;
+      // Zoom in with consistent speed
+      const newDist = Math.max(flyTargetDistance, dist - 0.02);
 
       camera.position.copy(_tempVec3_2.multiplyScalar(newDist));
       camera.lookAt(0, 0, 0);
 
-      // Complete when zoom reaches target (alignment continues naturally)
-      if (newDist < flyTargetDistance + 0.01) {
+      // Only complete when zoom is done
+      if (newDist <= flyTargetDistance) {
         flyToRef.current = null;
       }
     }
