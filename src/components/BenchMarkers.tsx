@@ -85,6 +85,68 @@ const _worldPos = new THREE.Vector3();
 const _normal = new THREE.Vector3();
 const _toCamera = new THREE.Vector3();
 
+// Mathematical ray-sphere intersection for precise clicking
+// Returns the intersection point on a perfect sphere, not affected by mesh tessellation
+function rayIntersectSphere(
+  rayOrigin: THREE.Vector3,
+  rayDirection: THREE.Vector3,
+  sphereCenter: THREE.Vector3,
+  sphereRadius: number
+): THREE.Vector3 | null {
+  const oc = rayOrigin.clone().sub(sphereCenter);
+  const a = rayDirection.dot(rayDirection);
+  const b = 2 * oc.dot(rayDirection);
+  const c = oc.dot(oc) - sphereRadius * sphereRadius;
+  const discriminant = b * b - 4 * a * c;
+
+  if (discriminant < 0) return null;
+
+  const t = (-b - Math.sqrt(discriminant)) / (2 * a);
+  if (t < 0) return null;
+
+  return rayOrigin.clone().add(rayDirection.clone().multiplyScalar(t));
+}
+
+// ==========================================
+// OFFSET ADJUSTMENT - Tweak these values to correct any consistent offset
+// Positive lat offset = shift marker north, negative = shift south
+// Positive lng offset = shift marker east, negative = shift west
+// ==========================================
+const LAT_OFFSET = -0.00006; // e.g., 0.0001 for ~11 meters north
+const LNG_OFFSET = 0; // e.g., 0.0001 for ~11 meters east (at equator)
+
+// Convert screen coordinates to lat/lng using mathematical ray-sphere intersection
+function screenToLatLng(
+  clientX: number,
+  clientY: number,
+  camera: THREE.Camera,
+  gl: THREE.WebGLRenderer
+): { lat: number; lng: number } | null {
+  const rect = gl.domElement.getBoundingClientRect();
+  const x = ((clientX - rect.left) / rect.width) * 2 - 1;
+  const y = -((clientY - rect.top) / rect.height) * 2 + 1;
+
+  const raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(new THREE.Vector2(x, y), camera);
+
+  const intersection = rayIntersectSphere(
+    raycaster.ray.origin,
+    raycaster.ray.direction,
+    new THREE.Vector3(0, 0, 0),
+    GLOBE_RADIUS
+  );
+
+  if (!intersection) return null;
+
+  const result = vec3ToLatLon(intersection);
+
+  // Apply offset correction
+  return {
+    lat: result.lat + LAT_OFFSET,
+    lng: result.lng + LNG_OFFSET,
+  };
+}
+
 /* A single bench marker with visual differentiation */
 function SingleMarker({
   bench,
@@ -383,95 +445,132 @@ function ClusterMarker({
   );
 }
 
-/* Picked-location marker (green pin when adding a bench) */
+/* Picked-location marker - symmetrical crosshair with drag support */
 function PickedLocationMarker() {
-  const { pickedLocation, transitioningBenchId } = useAppState();
+  const { pickedLocation, setPickedLocation, transitioningBenchId } = useAppState();
   const groupRef = useRef<THREE.Group>(null);
+  const { camera, gl } = useThree();
   const handleWheel = useWheelPassthrough();
   const isTransitioning = transitioningBenchId !== null;
+  const [isDragging, setIsDragging] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
+  // Local drag position - only commits to pickedLocation on drag end
+  const [dragPosition, setDragPosition] = useState<{ lat: number; lng: number } | null>(null);
+
+  // The position to display (drag position while dragging, otherwise picked location)
+  const displayPosition = isDragging && dragPosition ? dragPosition : pickedLocation;
 
   useFrame(() => {
-    if (!groupRef.current || !pickedLocation) return;
-    const pos = latLonToVec3(pickedLocation.lat, pickedLocation.lng, GLOBE_RADIUS + MARKER_HEIGHT);
+    if (!groupRef.current || !displayPosition) return;
+    const pos = latLonToVec3(displayPosition.lat, displayPosition.lng, GLOBE_RADIUS + MARKER_HEIGHT);
     groupRef.current.position.copy(pos);
   });
 
+  // Handle drag to reposition
+  const handlePointerDown = useCallback((e: React.PointerEvent) => {
+    if (isTransitioning) return;
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setIsDragging(true);
+    // Initialize drag position from current picked location
+    if (pickedLocation) {
+      setDragPosition({ ...pickedLocation });
+    }
+  }, [isTransitioning, pickedLocation]);
+
+  const handlePointerMove = useCallback((e: React.PointerEvent) => {
+    if (!isDragging || isTransitioning) return;
+    e.stopPropagation();
+
+    const result = screenToLatLng(e.clientX, e.clientY, camera, gl);
+    if (result) {
+      // Update local drag position only (no API calls)
+      setDragPosition({
+        lat: Math.round(result.lat * 1000000) / 1000000,
+        lng: Math.round(result.lng * 1000000) / 1000000,
+      });
+    }
+  }, [isDragging, isTransitioning, camera, gl]);
+
+  const handlePointerUp = useCallback((e: React.PointerEvent) => {
+    e.currentTarget.releasePointerCapture(e.pointerId);
+    // Commit the drag position to the actual picked location (triggers reverse geocoding)
+    if (dragPosition) {
+      setPickedLocation(dragPosition);
+    }
+    setIsDragging(false);
+    setDragPosition(null);
+  }, [dragPosition, setPickedLocation]);
+
   if (!pickedLocation) return null;
 
-  // Colors and styles based on transition state
-  const pinBackground = isTransitioning
-    ? 'linear-gradient(135deg, #c9945a, #8a6535)'
-    : 'linear-gradient(135deg, #a3c2a5, #6b8f6e)';
-  const pinShadow = isTransitioning
-    ? '0 2px 10px rgba(201,148,90,0.45)'
-    : '0 2px 10px rgba(107,143,110,0.45)';
-  const textColor = isTransitioning ? '#c9945a' : '#a3c2a5';
+  // Colors based on state
+  const markerColor = isTransitioning ? '#c9945a' : isDragging ? '#88b88a' : '#6b8f6e';
+  const glowColor = isTransitioning ? 'rgba(201,148,90,0.4)' : 'rgba(107,143,110,0.4)';
 
   return (
     <group ref={groupRef}>
       <Html center style={{ pointerEvents: 'none' }}>
         <div
-          className={`flex flex-col items-center select-none ${isTransitioning ? '' : 'animate-bounce'}`}
+          className="select-none flex flex-col items-center"
           onWheel={handleWheel}
-          style={{ pointerEvents: 'auto' }}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerUp}
+          onMouseEnter={() => setIsHovered(true)}
+          onMouseLeave={() => setIsHovered(false)}
+          style={{
+            pointerEvents: 'auto',
+            cursor: isTransitioning ? 'default' : isDragging ? 'grabbing' : 'grab',
+            touchAction: 'none',
+          }}
         >
-          <div
+          {/* Symmetrical crosshair/target marker */}
+          <svg
+            width="40"
+            height="40"
+            viewBox="-20 -20 40 40"
             style={{
-              width: 22,
-              height: 22,
-              borderRadius: '50% 50% 50% 3px',
-              transform: 'rotate(-45deg)',
-              background: pinBackground,
-              boxShadow: pinShadow,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              transition: 'all 0.5s ease-out',
+              filter: `drop-shadow(0 0 6px ${glowColor})`,
+              transition: 'transform 0.15s ease',
+              transform: isDragging ? 'scale(1.1)' : isHovered ? 'scale(1.05)' : 'scale(1)',
             }}
           >
-            {/* Plus icon (fades out) */}
-            <svg
-              viewBox="0 0 24 24"
+            {/* Outer circle */}
+            <circle
+              cx="0"
+              cy="0"
+              r="14"
               fill="none"
-              stroke="#17130e"
-              strokeWidth="2.5"
-              strokeLinecap="round"
-              style={{
-                width: 10,
-                height: 10,
-                transform: 'rotate(45deg)',
-                position: 'absolute',
-                opacity: isTransitioning ? 0 : 1,
-                transition: 'opacity 0.3s ease-out',
-              }}
-            >
-              <path d="M12 5v14M5 12h14" />
-            </svg>
-            {/* Bench icon (fades in) */}
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke={isTransitioning ? '#17130e' : '#17130e'}
+              stroke={markerColor}
               strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              style={{
-                width: 12,
-                height: 12,
-                transform: 'rotate(45deg)',
-                position: 'absolute',
-                opacity: isTransitioning ? 1 : 0,
-                transition: 'opacity 0.3s ease-out 0.2s',
-              }}
-            >
-              <path d="M5 6h14" />
-              <path d="M6 6v5" />
-              <path d="M18 6v5" />
-              <path d="M3 11h18" />
-              <path d="M5 11v6" />
-              <path d="M19 11v6" />
-            </svg>
-          </div>
+              opacity="0.6"
+            />
+            {/* Inner circle */}
+            <circle
+              cx="0"
+              cy="0"
+              r="6"
+              fill="none"
+              stroke={markerColor}
+              strokeWidth="2"
+            />
+            {/* Center dot - exact location */}
+            <circle
+              cx="0"
+              cy="0"
+              r="2"
+              fill={markerColor}
+            />
+            {/* Crosshair lines */}
+            <line x1="0" y1="-18" x2="0" y2="-10" stroke={markerColor} strokeWidth="2" strokeLinecap="round" />
+            <line x1="0" y1="10" x2="0" y2="18" stroke={markerColor} strokeWidth="2" strokeLinecap="round" />
+            <line x1="-18" y1="0" x2="-10" y2="0" stroke={markerColor} strokeWidth="2" strokeLinecap="round" />
+            <line x1="10" y1="0" x2="18" y2="0" stroke={markerColor} strokeWidth="2" strokeLinecap="round" />
+          </svg>
+
+          {/* Coordinates label - centered */}
           <div
             className="mt-1 px-1.5 py-0.5 rounded"
             style={{
@@ -479,12 +578,16 @@ function PickedLocationMarker() {
               border: '1px solid rgba(68,59,48,0.5)',
               fontSize: 9,
               fontFamily: "'JetBrains Mono', monospace",
-              color: textColor,
+              color: markerColor,
               opacity: isTransitioning ? 0 : 1,
-              transition: 'all 0.3s ease-out',
+              transition: 'all 0.2s ease',
+              whiteSpace: 'nowrap',
+              textAlign: 'center',
             }}
           >
-            {pickedLocation.lat.toFixed(4)}, {pickedLocation.lng.toFixed(4)}
+            {isDragging && dragPosition
+              ? `${dragPosition.lat.toFixed(4)}, ${dragPosition.lng.toFixed(4)}`
+              : `${pickedLocation.lat.toFixed(4)}, ${pickedLocation.lng.toFixed(4)}`}
           </div>
         </div>
       </Html>
@@ -492,28 +595,32 @@ function PickedLocationMarker() {
   );
 }
 
-/* Invisible sphere for click-to-pick */
+/* Invisible sphere for click-to-pick - uses mathematical intersection */
 function GlobeClickHandler() {
   const { pickingLocation, setPickingLocation, setPickedLocation } = useAppState();
+  const { camera, gl } = useThree();
 
   const handleClick = useCallback(
     (e: ThreeEvent<MouseEvent>) => {
       if (!pickingLocation) return;
       e.stopPropagation();
-      const { lat, lng } = vec3ToLatLon(e.point);
+
+      // Use mathematical ray-sphere intersection for perfect accuracy
+      const result = screenToLatLng(e.nativeEvent.clientX, e.nativeEvent.clientY, camera, gl);
+      if (!result) return;
+
       setPickedLocation({
-        lat: Math.round(lat * 10000) / 10000,
-        lng: Math.round(lng * 10000) / 10000,
+        lat: Math.round(result.lat * 1000000) / 1000000,
+        lng: Math.round(result.lng * 1000000) / 1000000,
       });
-      // Auto-toggle off picking mode after selecting
       setPickingLocation(false);
     },
-    [pickingLocation, setPickingLocation, setPickedLocation]
+    [pickingLocation, setPickingLocation, setPickedLocation, camera, gl]
   );
 
   return (
     <mesh visible={false} onClick={handleClick}>
-      <sphereGeometry args={[GLOBE_RADIUS + MARKER_HEIGHT, 64, 32]} />
+      <sphereGeometry args={[GLOBE_RADIUS + 0.001, 32, 16]} />
       <meshBasicMaterial transparent opacity={0} />
     </mesh>
   );
