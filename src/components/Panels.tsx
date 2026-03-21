@@ -17,8 +17,10 @@ type NearbyBench = {
   distance: number;
 };
 
-// Admin email - matches Forum.tsx
-const ADMIN_EMAIL = process.env.NEXT_PUBLIC_ADMIN_EMAIL || 'test@test.com';
+// Helper to check admin role
+function isUserAdmin(session: ReturnType<typeof useSession>['data']): boolean {
+  return (session?.user as Record<string, unknown>)?.role === 'admin';
+}
 
 /* ─── Confirmation Modal ────────────────────── */
 
@@ -95,9 +97,8 @@ export function BenchDetailPanel() {
 
   // Check if current user can delete this bench (owner or admin)
   const userId = session?.user ? (session.user as Record<string, unknown>).id as string : null;
-  const userEmail = session?.user?.email;
   const isOwner = userId === selectedBench.userId;
-  const isAdmin = userEmail === ADMIN_EMAIL;
+  const isAdmin = isUserAdmin(session);
   const canDelete = isOwner || isAdmin;
 
   const coords = `${selectedBench.latitude.toFixed(4)}, ${selectedBench.longitude.toFixed(4)}`;

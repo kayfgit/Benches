@@ -7,7 +7,7 @@ import { useAppState } from '@/lib/store';
 export function AuthModal() {
   const { showAuth, setShowAuth, authMode, setAuthMode } = useAppState();
   const [email, setEmail] = useState('');
-  const [name, setName] = useState('');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -37,7 +37,7 @@ export function AuthModal() {
         const res = await fetch('/api/register', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, name, password }),
+          body: JSON.stringify({ email, username, password }),
         });
         const data = await res.json();
         if (!res.ok) {
@@ -72,7 +72,7 @@ export function AuthModal() {
 
       setShowAuth(false);
       setEmail('');
-      setName('');
+      setUsername('');
       setPassword('');
     } catch {
       setError('Something went wrong');
@@ -125,16 +125,19 @@ export function AuthModal() {
           {authMode === 'register' && (
             <div>
               <label className="block text-sm text-text-secondary mb-1.5 font-medium">
-                Name
+                Username
               </label>
               <input
                 type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
+                value={username}
+                onChange={(e) => setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''))}
                 className="input-field"
-                placeholder="Your trail name"
+                placeholder="your_username"
                 required
+                minLength={3}
+                maxLength={20}
               />
+              <p className="text-xs text-text-muted mt-1">3-20 characters, letters, numbers, underscores only</p>
             </div>
           )}
           <div>

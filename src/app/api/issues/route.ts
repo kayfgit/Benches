@@ -7,7 +7,7 @@ export async function GET() {
   try {
     const issues = await prisma.issue.findMany({
       include: {
-        user: { select: { name: true } },
+        user: { select: { username: true } },
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -20,7 +20,7 @@ export async function GET() {
       status: issue.status,
       benchId: issue.benchId,
       userId: issue.userId,
-      userName: issue.user.name,
+      userName: issue.user.username,
       createdAt: issue.createdAt.toISOString(),
     }));
 
@@ -53,7 +53,7 @@ export async function POST(request: Request) {
         userId,
       },
       include: {
-        user: { select: { name: true } },
+        user: { select: { username: true } },
       },
     });
 
@@ -65,7 +65,7 @@ export async function POST(request: Request) {
       status: issue.status,
       benchId: issue.benchId,
       userId: issue.userId,
-      userName: issue.user.name,
+      userName: issue.user.username,
       createdAt: issue.createdAt.toISOString(),
     }, { status: 201 });
   } catch {

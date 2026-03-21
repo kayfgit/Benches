@@ -6,7 +6,10 @@ import { useAppState } from '@/lib/store';
 import { useToast } from '@/components/Toast';
 import type { Bench, Issue } from '@/types';
 
-const ADMIN_EMAIL = process.env.NEXT_PUBLIC_ADMIN_EMAIL || 'test@test.com';
+// Helper to check admin role
+function isUserAdmin(session: ReturnType<typeof useSession>['data']): boolean {
+  return (session?.user as Record<string, unknown>)?.role === 'admin';
+}
 
 // Helper for relative time
 function getTimeAgo(dateStr: string): string {
@@ -674,7 +677,7 @@ export function ForumPanel() {
   const [issues, setIssues] = useState<IssueData[]>([]);
   const [loadingIssues, setLoadingIssues] = useState(false);
 
-  const isAdmin = session?.user?.email === ADMIN_EMAIL;
+  const isAdmin = isUserAdmin(session);
 
   // Load issues
   useEffect(() => {

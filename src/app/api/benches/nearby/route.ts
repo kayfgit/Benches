@@ -42,7 +42,7 @@ export async function GET(request: Request) {
       },
       include: {
         photos: { take: 1 }, // Just need first photo for thumbnail
-        user: { select: { name: true } },
+        user: { select: { username: true } },
       },
     });
 
@@ -55,7 +55,7 @@ export async function GET(request: Request) {
         latitude: b.latitude,
         longitude: b.longitude,
         thumbnail: b.photos[0]?.url || null,
-        userName: b.user.name,
+        userName: b.user.username,
         distance: getDistanceMeters(lat, lng, b.latitude, b.longitude),
       }))
       .filter((b) => b.distance <= radius)

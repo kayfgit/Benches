@@ -42,7 +42,7 @@ export async function GET(request: Request) {
       where: whereClause,
       include: {
         photos: true,
-        user: { select: { name: true } },
+        user: { select: { username: true } },
         votes: true,
         comments: true,
       },
@@ -65,7 +65,7 @@ export async function GET(request: Request) {
         altitude: b.altitude,
         photos: b.photos,
         userId: b.userId,
-        userName: b.user.name,
+        userName: b.user.username,
         createdAt: b.createdAt.toISOString(),
         voteCount,
         userVote,
@@ -117,7 +117,7 @@ export async function POST(request: Request) {
       },
       include: {
         photos: true,
-        user: { select: { name: true } },
+        user: { select: { username: true } },
       },
     });
 
@@ -132,7 +132,7 @@ export async function POST(request: Request) {
       altitude: bench.altitude,
       photos: bench.photos,
       userId: bench.userId,
-      userName: bench.user.name,
+      userName: bench.user.username,
       createdAt: bench.createdAt.toISOString(),
     }, { status: 201 });
   } catch (error) {

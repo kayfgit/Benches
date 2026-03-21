@@ -3,9 +3,6 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 
-// Admin email - must match Forum.tsx
-const ADMIN_EMAIL = 'test@test.com';
-
 export async function DELETE(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -17,7 +14,8 @@ export async function DELETE(
     }
 
     // Check if admin
-    if (session.user.email !== ADMIN_EMAIL) {
+    const userRole = (session.user as Record<string, unknown>).role;
+    if (userRole !== 'admin') {
       return NextResponse.json({ error: 'Forbidden - Admin only' }, { status: 403 });
     }
 

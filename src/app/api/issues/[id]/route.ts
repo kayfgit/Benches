@@ -3,9 +3,6 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 
-// Admin email - must match Forum.tsx
-const ADMIN_EMAIL = 'test@test.com';
-
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -17,7 +14,8 @@ export async function PATCH(
     }
 
     // Check if admin
-    if (session.user.email !== ADMIN_EMAIL) {
+    const userRole = (session.user as Record<string, unknown>).role;
+    if (userRole !== 'admin') {
       return NextResponse.json({ error: 'Forbidden - Admin only' }, { status: 403 });
     }
 
@@ -32,7 +30,7 @@ export async function PATCH(
       where: { id: issueId },
       data: { status },
       include: {
-        user: { select: { name: true } },
+        user: { select: { username: true } },
       },
     });
 
@@ -44,7 +42,7 @@ export async function PATCH(
       status: issue.status,
       benchId: issue.benchId,
       userId: issue.userId,
-      userName: issue.user.name,
+      userName: issue.user.username,
       createdAt: issue.createdAt.toISOString(),
     });
   } catch {
@@ -63,7 +61,8 @@ export async function DELETE(
     }
 
     // Check if admin
-    if (session.user.email !== ADMIN_EMAIL) {
+    const userRole = (session.user as Record<string, unknown>).role;
+    if (userRole !== 'admin') {
       return NextResponse.json({ error: 'Forbidden - Admin only' }, { status: 403 });
     }
 
