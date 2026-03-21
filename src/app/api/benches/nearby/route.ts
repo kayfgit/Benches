@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 
+export const dynamic = 'force-dynamic';
+
 // Haversine formula to calculate distance between two points in meters
 function getDistanceMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const R = 6371000; // Earth's radius in meters
