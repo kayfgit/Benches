@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { getSupabase } from '@/lib/supabase';
+import { createClient } from '@supabase/supabase-js';
 import path from 'path';
 
 export const dynamic = 'force-dynamic';
@@ -26,8 +26,15 @@ export async function POST(request: Request) {
     const ext = path.extname(file.name) || '.jpg';
     const safeName = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`;
 
-    // Upload to Supabase Storage
-    const supabase = getSupabase();
+    // Upload to Supabase Storage (use service role to bypass RLS)
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+    if (!supabaseUrl || !serviceKey) {
+      return NextResponse.json({ error: 'Missing Supabase config' }, { status: 500 });
+    }
+
+    const supabase = createClient(supabaseUrl, serviceKey);
     const { error } = await supabase.storage
       .from('photos')
       .upload(safeName, buffer, {
