@@ -4,6 +4,8 @@ import { authOptions } from '@/lib/auth';
 import { getSupabase } from '@/lib/supabase';
 import path from 'path';
 
+export const dynamic = 'force-dynamic';
+
 export async function POST(request: Request) {
   try {
     const session = await getServerSession(authOptions);
@@ -35,7 +37,7 @@ export async function POST(request: Request) {
 
     if (error) {
       console.error('Supabase upload error:', error);
-      return NextResponse.json({ error: 'Upload failed' }, { status: 500 });
+      return NextResponse.json({ error: `Supabase error: ${error.message}` }, { status: 500 });
     }
 
     // Get public URL
@@ -46,6 +48,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ url: publicUrl });
   } catch (err) {
     console.error('Upload error:', err);
-    return NextResponse.json({ error: 'Upload failed' }, { status: 500 });
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
